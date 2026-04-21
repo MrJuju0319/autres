@@ -1,7 +1,6 @@
 -- =========================================================
--- Refined Storage Dashboard
--- Focus stockage + energie utile
--- Anti-flicker / Auto-update
+-- Refined Storage Dashboard V4
+-- Anti-flicker / Auto-update / Alerts / ETA / Trend
 -- =========================================================
 
 -- =========================
@@ -83,7 +82,17 @@ local CONFIG = {
     monitorScale = 0.5,
     refreshInterval = 1,
     historySize = 48,
-    title = "Refined Storage Dashboard v3",
+    title = "Refined Storage Dashboard v4",
+
+    -- seuils alertes
+    itemsWarnPercent = 80,
+    itemsDangerPercent = 95,
+
+    fluidsWarnPercent = 80,
+    fluidsDangerPercent = 95,
+
+    energyWarnLowPercent = 20,
+    energyDangerLowPercent = 5,
 }
 
 -- =========================
@@ -117,8 +126,7 @@ local energyStats = {
     lastStored = nil,
     lastTime = nil,
     deltaPerSec = 0,
-    inputAvg = 0,
-    outputEst = 0,
+    avgInput = 0,
 }
 
 -- =========================
@@ -177,6 +185,40 @@ local function formatNumber(n)
         return sign .. string.format("%.2fk", n / 1000)
     else
         return sign .. tostring(math.floor(n + 0.5))
+    end
+end
+
+local function formatRate(n)
+    n = tonumber(n) or 0
+    local sign = ""
+    if n > 0 then sign = "+" end
+    return sign .. formatNumber(n) .. "/s"
+end
+
+local function formatDuration(seconds)
+    seconds = tonumber(seconds)
+
+    if not seconds or seconds == math.huge or seconds < 0 then
+        return "--"
+    end
+
+    seconds = math.floor(seconds + 0.5)
+
+    local d = math.floor(seconds / 86400)
+    seconds = seconds % 86400
+    local h = math.floor(seconds / 3600)
+    seconds = seconds % 3600
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+
+    if d > 0 then
+        return string.format("%dj%02dh", d, h)
+    elseif h > 0 then
+        return string.format("%dh%02dm", h, m)
+    elseif m > 0 then
+        return string.format("%dm%02ds", m, s)
+    else
+        return string.format("%ds", s)
     end
 end
 
@@ -254,6 +296,26 @@ local function barString(width, used, total)
     end
 
     return string.rep("#", filled) .. string.rep("-", width - filled)
+end
+
+local function getAlertLabel(name, p, warn, danger, inverse)
+    if inverse then
+        if p <= danger then
+            return name .. ": CRIT", colors.red
+        elseif p <= warn then
+            return name .. ": LOW", colors.orange
+        else
+            return name .. ": OK", colors.lime
+        end
+    else
+        if p >= danger then
+            return name .. ": CRIT", colors.red
+        elseif p >= warn then
+            return name .. ": WARN", colors.orange
+        else
+            return name .. ": OK", colors.lime
+        end
+    end
 end
 
 -- =========================
@@ -335,18 +397,13 @@ local function updateEnergyStats(storedEnergy, avgInput)
         if dt > 0 then
             local delta = storedEnergy - energyStats.lastStored
             local instantDeltaPerSec = delta / dt
-
-            -- lissage simple
             energyStats.deltaPerSec = (energyStats.deltaPerSec * 0.7) + (instantDeltaPerSec * 0.3)
         end
     end
 
     energyStats.lastStored = storedEnergy
     energyStats.lastTime = now
-    energyStats.inputAvg = avgInput
-
-    -- OUT estime = IN - delta_stock
-    energyStats.outputEst = avgInput - energyStats.deltaPerSec
+    energyStats.avgInput = avgInput
 end
 
 local function getData()
@@ -377,22 +434,28 @@ local function getData()
 
     updateEnergyStats(storedEnergy, avgInput)
 
+    local pItems = percent(usedItems, totalItems)
+    local pFluids = percent(usedFluids, totalFluids)
+    local pEnergy = percent(storedEnergy, energyTotal)
+
     return {
         items = {
             used = usedItems,
             total = totalItems,
             types = itemTypes,
+            percent = pItems,
         },
         fluids = {
             used = usedFluids,
             total = totalFluids,
             types = fluidTypes,
+            percent = pFluids,
         },
         energy = {
             stored = storedEnergy,
             total = energyTotal,
-            inputAvg = energyStats.inputAvg,
-            outputEst = energyStats.outputEst,
+            percent = pEnergy,
+            inputAvg = energyStats.avgInput,
             deltaPerSec = energyStats.deltaPerSec,
         },
         network = {
@@ -426,12 +489,10 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
         line1 = line1 .. string.rep(" ", middleWidth - #line1)
     end
     line1 = line1 .. right
-
     writeLine(frame, y, line1, color)
     y = y + 1
 
-    local bar = barString(w, used, total > 0 and total or 1)
-    writeLine(frame, y, bar, color)
+    writeLine(frame, y, barString(w, used, total > 0 and total or 1), color)
     y = y + 1
 
     if CONFIG.showGraph then
@@ -451,7 +512,7 @@ end
 
 local function buildEnergySection(frame, y, energy)
     local w = size()
-    local p = percent(energy.stored, energy.total)
+    local p = energy.percent
     local color = getPercentColor(p)
 
     writeLine(frame, y, "Energie", colors.cyan)
@@ -472,24 +533,46 @@ local function buildEnergySection(frame, y, energy)
     writeLine(frame, y, barString(w, energy.stored, energy.total > 0 and energy.total or 1), color)
     y = y + 1
 
-    local inText = "IN: " .. formatNumber(energy.inputAvg) .. "/s"
-    local outText = "OUT est: " .. formatNumber(math.max(0, energy.outputEst)) .. "/s"
-    local line2 = inText .. " | " .. outText
-    writeLine(frame, y, line2, colors.lightBlue)
+    local trend = "Stable"
+    local eta = "--"
+
+    if energy.deltaPerSec > 1 then
+        trend = "Charge"
+        local remaining = energy.total - energy.stored
+        if remaining > 0 then
+            eta = formatDuration(remaining / energy.deltaPerSec)
+        end
+    elseif energy.deltaPerSec < -1 then
+        trend = "Decharge"
+        if energy.stored > 0 then
+            eta = formatDuration(energy.stored / math.abs(energy.deltaPerSec))
+        end
+    end
+
+    writeLine(frame, y, "Net: " .. formatRate(energy.deltaPerSec) .. " | " .. trend, colors.lightBlue)
     y = y + 1
 
-    local deltaPrefix = "Delta: "
-    local deltaValue = formatNumber(energy.deltaPerSec) .. "/s"
-    if energy.deltaPerSec > 0 then
-        deltaValue = "+" .. deltaValue
-    end
-    writeLine(frame, y, deltaPrefix .. deltaValue, colors.lightGray)
+    writeLine(frame, y, "ETA: " .. eta, colors.lightGray)
     y = y + 1
 
     writeLine(frame, y, string.rep("-", w), colors.gray)
     y = y + 1
 
     return y
+end
+
+local function buildAlertsLine(data)
+    local parts = {}
+
+    local itemsText = getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false)
+    local fluidsText = getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false)
+    local energyText = getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true)
+
+    table.insert(parts, itemsText)
+    table.insert(parts, fluidsText)
+    table.insert(parts, energyText)
+
+    return parts
 end
 
 local function buildFrame(data)
@@ -517,6 +600,19 @@ local function buildFrame(data)
     y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
     y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
     y = buildEnergySection(frame, y, data.energy)
+
+    if y <= h then
+        local alerts = buildAlertsLine(data)
+        local txt = alerts[1][1] .. " | " .. alerts[2][1] .. " | " .. alerts[3][1]
+        local color = colors.lime
+        if alerts[1][2] == colors.red or alerts[2][2] == colors.red or alerts[3][2] == colors.red then
+            color = colors.red
+        elseif alerts[1][2] == colors.orange or alerts[2][2] == colors.orange or alerts[3][2] == colors.orange then
+            color = colors.orange
+        end
+        writeLine(frame, y, txt, color)
+        y = y + 1
+    end
 
     if y <= h then
         local footer = "Types items: " .. tostring(data.items.types)
