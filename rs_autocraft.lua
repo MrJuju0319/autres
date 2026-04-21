@@ -1,79 +1,126 @@
 
+-- =========================================================
+-- Refined Storage Autocraft Monitor v2
+-- Plus joli, plus dynamique, moins de scintillement
+-- ComputerCraft / CC:Tweaked + rs_bridge
+-- =========================================================
+
+-- =========================
+-- CONFIG
+-- =========================
+local CONFIG = {
+    AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_autocraft.lua",
+    AUTO_UPDATE_ENABLED = true,
+    AUTO_UPDATE_FILE = "startup.lua",
+    AUTO_UPDATE_TMP = "startup.lua.tmp",
+
+    TITLE = "Refined Storage - Autocraft v5",
+    TEXT_SCALE = 0.5,
+    REFRESH_INTERVAL = 0.75,
+    PAGE_ROTATE_EVERY = 8,
+    ETA_SMOOTHING = 0.35,
+    USE_CUSTOM_PALETTE = true,
+    SHOW_FOOTER = true,
+}
+
 -- =========================
 -- AUTO UPDATE
 -- =========================
-local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_autocraft.lua"
-local AUTO_UPDATE_ENABLED = true
-local AUTO_UPDATE_FILE = "startup.lua"
-local AUTO_UPDATE_TMP = "startup.lua.tmp"
-
-local function autoUpdate()
-    if not AUTO_UPDATE_ENABLED then
-        return
+local function readFile(path)
+    if not fs.exists(path) then
+        return nil
     end
 
-    if not http then
-        print("HTTP indisponible, auto-update ignore.")
-        return
+    local handle = fs.open(path, "r")
+    if not handle then
+        return nil
     end
 
-    print("Verification mise a jour...")
+    local content = handle.readAll()
+    handle.close()
+    return content
+end
 
-    if fs.exists(AUTO_UPDATE_TMP) then
-        fs.delete(AUTO_UPDATE_TMP)
+local function writeFile(path, content)
+    local handle = fs.open(path, "w")
+    if not handle then
+        return false
     end
 
-    local ok = pcall(function()
-        shell.run("wget", AUTO_UPDATE_URL, AUTO_UPDATE_TMP)
-    end)
+    handle.write(content or "")
+    handle.close()
+    return true
+end
 
-    if not ok or not fs.exists(AUTO_UPDATE_TMP) then
-        print("Echec du telechargement.")
-        return
-    end
-
-    local h = fs.open(AUTO_UPDATE_TMP, "r")
-    local newContent = h and h.readAll() or nil
-    if h then h.close() end
-
-    if not newContent or newContent == "" then
-        print("Fichier telecharge vide.")
-        fs.delete(AUTO_UPDATE_TMP)
-        return
-    end
-
-    local oldContent = nil
-    if fs.exists(AUTO_UPDATE_FILE) then
-        local old = fs.open(AUTO_UPDATE_FILE, "r")
-        if old then
-            oldContent = old.readAll()
-            old.close()
+local function fetchUrl(url)
+    if http and http.get then
+        local ok, response = pcall(http.get, url)
+        if ok and response then
+            local content = response.readAll()
+            response.close()
+            if content and content ~= "" then
+                return content
+            end
         end
     end
 
-    if oldContent == newContent then
-        print("Aucune mise a jour.")
-        fs.delete(AUTO_UPDATE_TMP)
+    if shell and shell.run then
+        if fs.exists(CONFIG.AUTO_UPDATE_TMP) then
+            fs.delete(CONFIG.AUTO_UPDATE_TMP)
+        end
+
+        local ok = pcall(function()
+            shell.run("wget", url, CONFIG.AUTO_UPDATE_TMP)
+        end)
+
+        if ok and fs.exists(CONFIG.AUTO_UPDATE_TMP) then
+            local content = readFile(CONFIG.AUTO_UPDATE_TMP)
+            fs.delete(CONFIG.AUTO_UPDATE_TMP)
+            if content and content ~= "" then
+                return content
+            end
+        end
+    end
+
+    return nil
+end
+
+local function autoUpdate()
+    if not CONFIG.AUTO_UPDATE_ENABLED then
         return
     end
 
-    if fs.exists(AUTO_UPDATE_FILE) then
-        fs.delete(AUTO_UPDATE_FILE)
+    local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL)
+    if not remote then
+        print("Auto-update: impossible de verifier la version distante.")
+        return
     end
 
-    fs.move(AUTO_UPDATE_TMP, AUTO_UPDATE_FILE)
-    print("Mise a jour appliquee, redemarrage...")
-    sleep(1)
-    os.reboot()
+    local localContent = readFile(CONFIG.AUTO_UPDATE_FILE)
+    if localContent == remote then
+        print("Auto-update: aucune mise a jour.")
+        return
+    end
+
+    if writeFile(CONFIG.AUTO_UPDATE_TMP, remote) then
+        if fs.exists(CONFIG.AUTO_UPDATE_FILE) then
+            fs.delete(CONFIG.AUTO_UPDATE_FILE)
+        end
+
+        fs.move(CONFIG.AUTO_UPDATE_TMP, CONFIG.AUTO_UPDATE_FILE)
+        print("Auto-update: mise a jour appliquee, reboot...")
+        sleep(1)
+        os.reboot()
+    else
+        print("Auto-update: echec d'ecriture.")
+    end
 end
 
 autoUpdate()
 
--- startup.lua
--- Refined Storage Craft Monitor
--- Compatible avec ton format getCraftingTasks()
--- task.resource / task.quantity / task.completion
-
+-- =========================
+-- PERIPHERIQUES
+-- =========================
 local bridge = peripheral.find("rs_bridge")
 if not bridge then
     error("rs_bridge non detecte")
@@ -84,113 +131,106 @@ if not mon then
     error("monitor non detecte")
 end
 
-mon.setTextScale(0.5)
+mon.setTextScale(CONFIG.TEXT_SCALE)
 
+local monitorName = peripheral.getName(mon)
+
+-- =========================
+-- ETAT
+-- =========================
 local history = {}
+local state = {
+    page = 1,
+    sortIndex = 1,
+    viewIndex = 1,
+    frame = 1,
+    lastRotate = os.clock(),
+    lastTasks = {},
+    lastStats = {},
+    lastError = nil,
+}
 
-local function clear()
-    mon.setBackgroundColor(colors.black)
-    mon.setTextColor(colors.white)
-    mon.clear()
-    mon.setCursorPos(1, 1)
+local SORT_MODES = {
+    { key = "status", label = "STATUT" },
+    { key = "eta",    label = "ETA"    },
+    { key = "name",   label = "NOM"    },
+    { key = "qty",    label = "QTE"    },
+    { key = "pct",    label = "%"      },
+}
+
+local VIEW_MODES = {
+    { key = "detail",  label = "DETAIL"  },
+    { key = "compact", label = "COMPACT" },
+}
+
+local SPINNER = { "|", "/", "-", "\\" }
+
+-- =========================
+-- OUTILS
+-- =========================
+local function clamp(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
 end
 
 local function trim(text, maxLen)
     text = tostring(text or "")
+    if maxLen <= 0 then return "" end
     if #text <= maxLen then return text end
     if maxLen <= 3 then return text:sub(1, maxLen) end
     return text:sub(1, maxLen - 3) .. "..."
 end
 
-local function getTasks()
-    local ok, tasks = pcall(function()
-        return bridge.getCraftingTasks()
-    end)
-    if ok and type(tasks) == "table" then
-        return tasks
-    end
-    return {}
+local function fillLine(termObj, y, bg)
+    local w = termObj.getSize()
+    termObj.setCursorPos(1, y)
+    termObj.setBackgroundColor(bg)
+    termObj.write(string.rep(" ", w))
 end
 
-local function drawBar(x, y, w, progress, total)
-    local filled = 0
-    if total > 0 then
-        filled = math.floor((progress / total) * w + 0.5)
-        if filled < 0 then filled = 0 end
-        if filled > w then filled = w end
+local function writeAt(termObj, x, y, text, fg, bg, maxLen)
+    local w = termObj.getSize()
+    if y < 1 then return end
+    if x > w then return end
+
+    text = tostring(text or "")
+    if maxLen then
+        text = trim(text, maxLen)
     end
 
-    mon.setCursorPos(x, y)
-    mon.setBackgroundColor(colors.gray)
-    mon.write(string.rep(" ", w))
-
-    if filled > 0 then
-        mon.setCursorPos(x, y)
-        mon.setBackgroundColor(colors.green)
-        mon.write(string.rep(" ", filled))
+    if x < 1 then
+        text = text:sub(2 - x)
+        x = 1
     end
 
-    mon.setBackgroundColor(colors.black)
+    if text == "" then return end
+
+    termObj.setCursorPos(x, y)
+    if bg then termObj.setBackgroundColor(bg) end
+    if fg then termObj.setTextColor(fg) end
+    termObj.write(trim(text, w - x + 1))
 end
 
-local function getName(task)
-    if task.resource then
-        return task.resource.displayName or task.resource.name or "Inconnu"
-    end
-    return "Inconnu"
+local function centerText(termObj, y, text, fg, bg)
+    local w = termObj.getSize()
+    text = trim(text, w)
+    local x = math.max(1, math.floor((w - #text) / 2) + 1)
+    writeAt(termObj, x, y, text, fg, bg)
 end
 
-local function getId(task, index)
-    return task.id or ("task_" .. tostring(index))
-end
+local function formatNumber(n)
+    n = tonumber(n) or 0
+    n = math.floor(n + 0.5)
 
-local function getProgress(task)
-    local total = tonumber(task.quantity) or tonumber(task.resource and task.resource.count) or 0
-    local completion = tonumber(task.completion) or 0
-    if completion < 0 then completion = 0 end
-    if completion > 1 then completion = 1 end
-
-    local current = total * completion
-    return current, total, completion
-end
-
-local function getStatus(task)
-    local completion = tonumber(task.completion) or 0
-
-    if completion >= 1 then
-        return "Termine", colors.lime
-    elseif completion > 0 then
-        return "En cours", colors.yellow
-    else
-        return "Attente", colors.lightGray
+    local s = tostring(n)
+    local result = ""
+    while #s > 3 do
+        result = " " .. s:sub(-3) .. result
+        s = s:sub(1, -4)
     end
-end
-
-local function getPercent(completion)
-    return math.floor((completion or 0) * 100 + 0.5)
-end
-
-local function getTextIcon(task)
-    local res = task.resource or {}
-    local name = res.displayName or res.name or "?"
-    local raw = res.name or name
-
-    if raw:find("extrastorage:disk_") then
-        return "[D]"
-    end
-
-    local words = {}
-    for w in name:gmatch("[%w]+") do
-        words[#words + 1] = w
-    end
-
-    if #words >= 2 then
-        return "[" .. words[1]:sub(1,1):upper() .. words[2]:sub(1,1):upper() .. "]"
-    elseif #words == 1 then
-        return "[" .. words[1]:sub(1, math.min(2, #words[1])):upper() .. "]"
-    end
-
-    return "[?]"
+    result = s .. result
+    return result
 end
 
 local function formatTime(seconds)
@@ -213,14 +253,94 @@ local function formatTime(seconds)
     end
 end
 
-local function estimateRemaining(task, index, currentProgress, total, completion)
-    local id = getId(task, index)
+local function getTaskName(task)
+    local res = task.resource or {}
+    return res.displayName or res.name or "Inconnu"
+end
+
+local function getTaskRawName(task)
+    local res = task.resource or {}
+    return res.name or res.displayName or "unknown"
+end
+
+local function getTaskKey(task)
+    local res = task.resource or {}
+
+    if task.id ~= nil then
+        return "id|" .. tostring(task.id)
+    end
+
+    return table.concat({
+        tostring(res.name or res.displayName or "unknown"),
+        tostring(task.quantity or res.count or 0)
+    }, "|")
+end
+
+local function getProgress(task)
+    local res = task.resource or {}
+    local total = tonumber(task.quantity) or tonumber(res.count) or 0
+    local completion = tonumber(task.completion) or 0
+
+    completion = clamp(completion, 0, 1)
+
+    local current = total * completion
+    return current, total, completion
+end
+
+local function getStatus(task)
+    local _, _, completion = getProgress(task)
+
+    if completion >= 1 then
+        return "TERMINE", colors.lime
+    elseif completion > 0 then
+        return "EN COURS", colors.yellow
+    else
+        return "ATTENTE", colors.lightGray
+    end
+end
+
+local function getPercent(task)
+    local _, _, completion = getProgress(task)
+    return math.floor((completion * 100) + 0.5)
+end
+
+local function getTaskIcon(task)
+    local raw = getTaskRawName(task)
+
+    if raw:find("extrastorage:disk_") or raw:find("refinedstorage:") and raw:find("disk") then
+        return "DSK"
+    elseif raw:find("processor") then
+        return "CPU"
+    elseif raw:find("crafting") then
+        return "CRF"
+    elseif raw:find("storage") then
+        return "STO"
+    elseif raw:find("cable") then
+        return "NET"
+    end
+
+    local pretty = getTaskName(task)
+    local chars = {}
+    for word in pretty:gmatch("[%w]+") do
+        chars[#chars + 1] = word:sub(1, 1):upper()
+        if #chars >= 3 then break end
+    end
+
+    if #chars == 0 then
+        return "???"
+    end
+
+    return table.concat(chars)
+end
+
+local function estimateRemaining(task, current, total, completion)
+    local key = getTaskKey(task)
     local now = os.epoch("utc") / 1000
 
-    local entry = history[id]
+    local entry = history[key]
     if not entry then
-        history[id] = {
-            lastProgress = currentProgress,
+        history[key] = {
+            lastProgress = current,
             lastTime = now,
             rate = nil,
         }
@@ -228,19 +348,18 @@ local function estimateRemaining(task, index, currentProgress, total, completion
     end
 
     local dt = now - entry.lastTime
-    local dp = currentProgress - entry.lastProgress
+    local dp = current - entry.lastProgress
 
     if dt > 0 and dp > 0 then
         local instantRate = dp / dt
-
         if entry.rate then
-            entry.rate = (entry.rate * 0.7) + (instantRate * 0.3)
+            entry.rate = (entry.rate * (1 - CONFIG.ETA_SMOOTHING)) + (instantRate * CONFIG.ETA_SMOOTHING)
         else
             entry.rate = instantRate
         end
     end
 
-    entry.lastProgress = currentProgress
+    entry.lastProgress = current
     entry.lastTime = now
 
     if completion >= 1 then
@@ -251,7 +370,7 @@ local function estimateRemaining(task, index, currentProgress, total, completion
         return nil
     end
 
-    local remaining = total - currentProgress
+    local remaining = total - current
     if remaining <= 0 then
         return 0
     end
@@ -261,93 +380,533 @@ end
 
 local function cleanupHistory(tasks)
     local alive = {}
+
     for i, task in ipairs(tasks) do
-        alive[getId(task, i)] = true
+        alive[getTaskKey(task)] = true
     end
 
-    for id, _ in pairs(history) do
-        if not alive[id] then
-            history[id] = nil
+    for key in pairs(history) do
+        if not alive[key] then
+            history[key] = nil
         end
     end
 end
 
-local function draw()
-    clear()
+local function safeGetTasks()
+    local ok, tasks = pcall(function()
+        return bridge.getCraftingTasks()
+    end)
 
-    local w, h = mon.getSize()
-    local tasks = getTasks()
-    cleanupHistory(tasks)
+    if ok and type(tasks) == "table" then
+        return tasks, nil
+    end
 
-    mon.setCursorPos(1, 1)
-    mon.setTextColor(colors.cyan)
-    mon.write(trim("Refined Storage - Crafts", w))
+    return nil, "Impossible de lire getCraftingTasks()"
+end
 
-    local right = "Jobs: " .. tostring(#tasks)
-    mon.setCursorPos(math.max(1, w - #right + 1), 1)
-    mon.setTextColor(colors.lightGray)
-    mon.write(right)
+local function sortTasks(tasks)
+    local mode = SORT_MODES[state.sortIndex].key
 
-    mon.setCursorPos(1, 2)
-    mon.setTextColor(colors.gray)
-    mon.write(string.rep("-", w))
+    table.sort(tasks, function(a, b)
+        local ac, at, acomp = getProgress(a)
+        local bc, bt, bcomp = getProgress(b)
 
-    if #tasks == 0 then
-        mon.setCursorPos(1, 4)
-        mon.setTextColor(colors.lime)
-        mon.write("Aucun craft en cours")
+        local aeta = math.huge
+        local beta = math.huge
+
+        do
+            local key = getTaskKey(a)
+            local entry = history[key]
+            if acomp >= 1 then
+                aeta = 0
+            elseif entry and entry.rate and entry.rate > 0 then
+                aeta = math.max(0, (at - ac) / entry.rate)
+            end
+        end
+
+        do
+            local key = getTaskKey(b)
+            local entry = history[key]
+            if bcomp >= 1 then
+                beta = 0
+            elseif entry and entry.rate and entry.rate > 0 then
+                beta = math.max(0, (bt - bc) / entry.rate)
+            end
+        end
+
+        if mode == "status" then
+            local sa = (acomp >= 1 and 2) or (acomp > 0 and 1) or 0
+            local sb = (bcomp >= 1 and 2) or (bcomp > 0 and 1) or 0
+            if sa ~= sb then return sa > sb end
+            if acomp ~= bcomp then return acomp > bcomp end
+            return getTaskName(a) < getTaskName(b)
+        elseif mode == "eta" then
+            if aeta ~= beta then return aeta < beta end
+            return getTaskName(a) < getTaskName(b)
+        elseif mode == "name" then
+            return getTaskName(a):lower() < getTaskName(b):lower()
+        elseif mode == "qty" then
+            if at ~= bt then return at > bt end
+            return getTaskName(a) < getTaskName(b)
+        elseif mode == "pct" then
+            if acomp ~= bcomp then return acomp > bcomp end
+            return getTaskName(a) < getTaskName(b)
+        end
+
+        return getTaskName(a) < getTaskName(b)
+    end)
+end
+
+local function buildStats(tasks)
+    local stats = {
+        jobs = #tasks,
+        waiting = 0,
+        running = 0,
+        done = 0,
+        totalItems = 0,
+        currentItems = 0,
+    }
+
+    for _, task in ipairs(tasks) do
+        local current, total, completion = getProgress(task)
+        stats.totalItems = stats.totalItems + total
+        stats.currentItems = stats.currentItems + current
+
+        if completion >= 1 then
+            stats.done = stats.done + 1
+        elseif completion > 0 then
+            stats.running = stats.running + 1
+        else
+            stats.waiting = stats.waiting + 1
+        end
+    end
+
+    if stats.totalItems > 0 then
+        stats.percent = clamp(stats.currentItems / stats.totalItems, 0, 1)
+    elseif stats.jobs > 0 then
+        stats.percent = clamp(stats.done / stats.jobs, 0, 1)
+    else
+        stats.percent = 0
+    end
+
+    return stats
+end
+
+-- =========================
+-- UI
+-- =========================
+local function applyPalette()
+    if not CONFIG.USE_CUSTOM_PALETTE then
         return
     end
 
-    local linesPerTask = 5
-    local maxTasks = math.max(1, math.floor((h - 2) / linesPerTask))
-    local y = 3
+    local ok = pcall(function()
+        mon.setPaletteColor(colors.black,      0x101218)
+        mon.setPaletteColor(colors.gray,       0x2B3240)
+        mon.setPaletteColor(colors.lightGray,  0x8E97A8)
+        mon.setPaletteColor(colors.white,      0xF2F4F8)
+        mon.setPaletteColor(colors.cyan,       0x38BDF8)
+        mon.setPaletteColor(colors.blue,       0x2563EB)
+        mon.setPaletteColor(colors.lightBlue,  0x60A5FA)
+        mon.setPaletteColor(colors.green,      0x16A34A)
+        mon.setPaletteColor(colors.lime,       0x84CC16)
+        mon.setPaletteColor(colors.yellow,     0xEAB308)
+        mon.setPaletteColor(colors.orange,     0xF97316)
+        mon.setPaletteColor(colors.red,        0xEF4444)
+    end)
 
-    for i = 1, math.min(#tasks, maxTasks) do
-        local task = tasks[i]
-
-        local name = getName(task)
-        local icon = getTextIcon(task)
-        local progress, total, completion = getProgress(task)
-        local percent = getPercent(completion)
-        local status, statusColor = getStatus(task)
-        local eta = estimateRemaining(task, i, progress, total, completion)
-
-        local progressInt = math.floor(progress + 0.5)
-        local label = progressInt .. "/" .. tostring(total) .. " " .. percent .. "%"
-        local etaText = "ETA " .. formatTime(eta)
-
-        mon.setCursorPos(1, y)
-        mon.setTextColor(colors.yellow)
-        mon.write(trim("[" .. i .. "] " .. icon .. " " .. name, w))
-        y = y + 1
-
-        mon.setCursorPos(2, y)
-        mon.setTextColor(statusColor)
-        mon.write(trim("Etat: " .. status, w))
-        y = y + 1
-
-        local barWidth = math.max(10, w - 2)
-        drawBar(2, y, barWidth, progress, total > 0 and total or 1)
-        y = y + 1
-
-        mon.setCursorPos(2, y)
-        mon.setTextColor(colors.white)
-        mon.write(trim(label, w - 1))
-
-        mon.setCursorPos(math.max(2, w - #etaText + 1), y)
-        mon.setTextColor(colors.lightBlue)
-        mon.write(trim(etaText, math.max(1, w - (math.max(2, w - #etaText + 1)) + 1)))
-        y = y + 1
-
-        mon.setCursorPos(1, y)
-        mon.setTextColor(colors.gray)
-        mon.write(string.rep("-", w))
-        y = y + 1
+    if not ok then
+        -- Moniteur non avance ou palette non supportee
     end
 end
 
+applyPalette()
+
+local backBuffer
+
+local function getBuffer()
+    local w, h = mon.getSize()
+
+    if not backBuffer then
+        backBuffer = window.create(mon, 1, 1, w, h, false)
+    else
+        local bw, bh = backBuffer.getSize()
+        if bw ~= w or bh ~= h then
+            backBuffer = window.create(mon, 1, 1, w, h, false)
+        end
+    end
+
+    backBuffer.setVisible(false)
+    backBuffer.setBackgroundColor(colors.black)
+    backBuffer.setTextColor(colors.white)
+    backBuffer.clear()
+    backBuffer.setCursorPos(1, 1)
+
+    return backBuffer, w, h
+end
+
+local function drawButton(termObj, x, y, label, isActive)
+    local bg = isActive and colors.blue or colors.gray
+    local fg = colors.white
+    local text = " " .. label .. " "
+    writeAt(termObj, x, y, text, fg, bg)
+    return #text
+end
+
+local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
+    ratio = clamp(ratio or 0, 0, 1)
+
+    local filled = math.floor((w * ratio) + 0.5)
+    filled = clamp(filled, 0, w)
+
+    termObj.setCursorPos(x, y)
+    termObj.setBackgroundColor(emptyColor)
+    termObj.write(string.rep(" ", w))
+
+    if filled > 0 then
+        termObj.setCursorPos(x, y)
+        termObj.setBackgroundColor(fillColor)
+        termObj.write(string.rep(" ", filled))
+    end
+
+    if label and #label > 0 then
+        local tx = x + math.max(0, math.floor((w - #label) / 2))
+        writeAt(termObj, tx, y, label, colors.white, nil)
+    end
+end
+
+local function drawHeader(termObj, stats, w)
+    fillLine(termObj, 1, colors.gray)
+    fillLine(termObj, 2, colors.black)
+    fillLine(termObj, 3, colors.black)
+
+    local spinner = SPINNER[((state.frame - 1) % #SPINNER) + 1]
+    writeAt(termObj, 2, 1, spinner .. " " .. trim(CONFIG.TITLE, math.max(1, w - 22)), colors.white, colors.gray)
+
+    local jobText = "Jobs " .. tostring(stats.jobs)
+    writeAt(termObj, math.max(1, w - #jobText - 1), 1, jobText .. " ", colors.cyan, colors.gray)
+
+    local barLabel = tostring(math.floor(stats.percent * 100 + 0.5)) .. "%"
+    drawProgressBar(termObj, 2, 2, math.max(10, w - 2), stats.percent, colors.green, colors.gray, barLabel)
+
+    local summary = string.format(
+        "Done %d  Run %d  Wait %d",
+        stats.done, stats.running, stats.waiting
+    )
+    writeAt(termObj, 2, 3, trim(summary, w - 2), colors.lightGray, colors.black)
+
+    local sortLabel = "Tri:" .. SORT_MODES[state.sortIndex].label
+    writeAt(termObj, math.max(2, w - #sortLabel - 1), 3, sortLabel, colors.lightBlue, colors.black)
+end
+
+local function drawTaskCardDetail(termObj, task, index, x, y, w)
+    local current, total, completion = getProgress(task)
+    local name = getTaskName(task)
+    local status, statusColor = getStatus(task)
+    local eta = estimateRemaining(task, current, total, completion)
+    local percent = math.floor(completion * 100 + 0.5)
+    local icon = getTaskIcon(task)
+
+    fillLine(termObj, y, colors.gray)
+    fillLine(termObj, y + 1, colors.black)
+    fillLine(termObj, y + 2, colors.black)
+    fillLine(termObj, y + 3, colors.black)
+    fillLine(termObj, y + 4, colors.gray)
+
+    local title = string.format(" %02d [%s] %s", index, icon, name)
+    writeAt(termObj, x, y, trim(title, w), colors.white, colors.gray)
+
+    writeAt(termObj, x + 1, y + 1, "Etat: " .. status, statusColor, colors.black, w - 2)
+    local etaText = "ETA " .. formatTime(eta)
+    writeAt(termObj, math.max(x + 1, x + w - #etaText), y + 1, etaText, colors.lightBlue, colors.black)
+
+    drawProgressBar(
+        termObj,
+        x + 1,
+        y + 2,
+        math.max(10, w - 2),
+        completion,
+        (completion >= 1 and colors.lime) or (completion > 0 and colors.orange) or colors.gray,
+        colors.gray,
+        percent .. "%"
+    )
+
+    local info = string.format("Fait: %s / %s", formatNumber(current), formatNumber(total))
+    writeAt(termObj, x + 1, y + 3, trim(info, w - 2), colors.white, colors.black)
+
+    local raw = getTaskRawName(task)
+    writeAt(termObj, x + 1, y + 4, trim(raw, w - 2), colors.lightGray, colors.gray)
+end
+
+local function drawTaskCardCompact(termObj, task, index, x, y, w)
+    local current, total, completion = getProgress(task)
+    local name = getTaskName(task)
+    local status, statusColor = getStatus(task)
+    local eta = estimateRemaining(task, current, total, completion)
+    local percent = math.floor(completion * 100 + 0.5)
+    local icon = getTaskIcon(task)
+
+    fillLine(termObj, y, colors.gray)
+    fillLine(termObj, y + 1, colors.black)
+    fillLine(termObj, y + 2, colors.gray)
+
+    local header = string.format(" %02d [%s] %s", index, icon, name)
+    writeAt(termObj, x, y, trim(header, w), colors.white, colors.gray)
+
+    local bodyLeft = string.format("%s  %s/%s", status, formatNumber(current), formatNumber(total))
+    writeAt(termObj, x + 1, y + 1, trim(bodyLeft, w - 14), statusColor, colors.black)
+
+    local bodyRight = percent .. "% " .. formatTime(eta)
+    writeAt(termObj, math.max(x + 1, x + w - #bodyRight), y + 1, bodyRight, colors.lightBlue, colors.black)
+
+    drawProgressBar(
+        termObj,
+        x + 1,
+        y + 2,
+        math.max(10, w - 2),
+        completion,
+        (completion >= 1 and colors.lime) or (completion > 0 and colors.orange) or colors.gray,
+        colors.gray,
+        ""
+    )
+end
+
+local function drawEmptyState(termObj, w, h)
+    fillLine(termObj, 5, colors.black)
+    fillLine(termObj, 6, colors.black)
+    fillLine(termObj, 7, colors.black)
+
+    if state.lastError then
+        centerText(termObj, math.floor(h / 2) - 1, "Source indisponible", colors.red, colors.black)
+        centerText(termObj, math.floor(h / 2) + 1, trim(state.lastError, w - 2), colors.lightGray, colors.black)
+    else
+        centerText(termObj, math.floor(h / 2) - 1, "Aucun craft en cours", colors.lime, colors.black)
+        centerText(termObj, math.floor(h / 2) + 1, "Le reseau est calme.", colors.lightGray, colors.black)
+    end
+end
+
+local function drawFooter(termObj, w, h, totalPages)
+    if not CONFIG.SHOW_FOOTER or h < 8 then
+        return
+    end
+
+    fillLine(termObj, h, colors.black)
+
+    local left = 2
+    left = left + drawButton(termObj, left, h, "TRI", false) + 1
+    left = left + drawButton(termObj, left, h, "VUE", false) + 1
+
+    local pageText = string.format("Page %d/%d", state.page, totalPages)
+    writeAt(termObj, math.max(left, w - #pageText - 1), h, pageText, colors.cyan, colors.black)
+end
+
+local function getLayout(h)
+    local top = 4
+    local footer = (CONFIG.SHOW_FOOTER and h >= 8) and 1 or 0
+    local usable = h - top - footer + 1
+
+    if VIEW_MODES[state.viewIndex].key == "detail" then
+        return {
+            top = top,
+            footer = footer,
+            cardHeight = 5,
+            perPage = math.max(1, math.floor(usable / 5))
+        }
+    else
+        return {
+            top = top,
+            footer = footer,
+            cardHeight = 3,
+            perPage = math.max(1, math.floor(usable / 3))
+        }
+    end
+end
+
+local function drawScreen(tasks, stats)
+    local termObj, w, h = getBuffer()
+    drawHeader(termObj, stats, w)
+
+    if #tasks == 0 then
+        drawEmptyState(termObj, w, h)
+        drawFooter(termObj, w, h, 1)
+        backBuffer.setVisible(true)
+        return
+    end
+
+    local layout = getLayout(h)
+    local totalPages = math.max(1, math.ceil(#tasks / layout.perPage))
+
+    state.page = clamp(state.page, 1, totalPages)
+
+    local startIndex = ((state.page - 1) * layout.perPage) + 1
+    local endIndex = math.min(#tasks, startIndex + layout.perPage - 1)
+
+    local y = layout.top
+
+    for i = startIndex, endIndex do
+        if VIEW_MODES[state.viewIndex].key == "detail" then
+            drawTaskCardDetail(termObj, tasks[i], i, 1, y, w)
+        else
+            drawTaskCardCompact(termObj, tasks[i], i, 1, y, w)
+        end
+        y = y + layout.cardHeight
+    end
+
+    while y <= h - layout.footer do
+        fillLine(termObj, y, colors.black)
+        y = y + 1
+    end
+
+    drawFooter(termObj, w, h, totalPages)
+    backBuffer.setVisible(true)
+end
+
+-- =========================
+-- INTERACTIONS
+-- =========================
+local function getTotalPages(taskCount)
+    local _, h = mon.getSize()
+    local layout = getLayout(h)
+    return math.max(1, math.ceil(taskCount / layout.perPage))
+end
+
+local function cycleSort()
+    state.sortIndex = state.sortIndex + 1
+    if state.sortIndex > #SORT_MODES then
+        state.sortIndex = 1
+    end
+end
+
+local function cycleView()
+    state.viewIndex = state.viewIndex + 1
+    if state.viewIndex > #VIEW_MODES then
+        state.viewIndex = 1
+    end
+end
+
+local function nextPage()
+    local totalPages = getTotalPages(#state.lastTasks)
+    state.page = state.page + 1
+    if state.page > totalPages then
+        state.page = 1
+    end
+end
+
+local function handleTouch(x, y)
+    local w, h = mon.getSize()
+
+    if CONFIG.SHOW_FOOTER and y == h then
+        if x >= 2 and x <= 7 then
+            cycleSort()
+            state.page = 1
+            return
+        elseif x >= 9 and x <= 14 then
+            cycleView()
+            state.page = 1
+            return
+        else
+            nextPage()
+            return
+        end
+    end
+
+    if y <= 3 then
+        if x <= math.floor(w / 2) then
+            cycleSort()
+            state.page = 1
+        else
+            nextPage()
+        end
+        return
+    end
+
+    nextPage()
+end
+
+-- =========================
+-- BOUCLE
+-- =========================
+local function refreshData()
+    bridge = bridge or peripheral.find("rs_bridge")
+    mon = mon or peripheral.find("monitor")
+
+    if not mon then
+        error("monitor non detecte")
+    end
+
+    mon.setTextScale(CONFIG.TEXT_SCALE)
+
+    if not bridge then
+        state.lastTasks = {}
+        state.lastStats = buildStats({})
+        state.lastError = "rs_bridge non detecte"
+        return
+    end
+
+    local tasks, err = safeGetTasks()
+    if not tasks then
+        state.lastTasks = {}
+        state.lastStats = buildStats({})
+        state.lastError = err or "Erreur inconnue"
+        return
+    end
+
+    state.lastError = nil
+    cleanupHistory(tasks)
+    sortTasks(tasks)
+
+    state.lastTasks = tasks
+    state.lastStats = buildStats(tasks)
+
+    local now = os.clock()
+    local totalPages = getTotalPages(#tasks)
+    if totalPages > 1 and (now - state.lastRotate) >= CONFIG.PAGE_ROTATE_EVERY then
+        state.page = (state.page % totalPages) + 1
+        state.lastRotate = now
+    elseif totalPages <= 1 then
+        state.page = 1
+        state.lastRotate = now
+    end
+end
+
+local function render()
+    state.frame = state.frame + 1
+    drawScreen(state.lastTasks, state.lastStats)
+end
+
+refreshData()
+render()
+
+local timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
+
 while true do
-    draw()
-    sleep(1)
+    local event, p1, p2, p3 = os.pullEvent()
+
+    if event == "timer" and p1 == timer then
+        refreshData()
+        render()
+        timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
+
+    elseif event == "monitor_touch" and p1 == monitorName then
+        handleTouch(p2, p3)
+        render()
+
+    elseif event == "monitor_resize" and p1 == monitorName then
+        mon.setTextScale(CONFIG.TEXT_SCALE)
+        applyPalette()
+        render()
+
+    elseif event == "peripheral" or event == "peripheral_detach" then
+        bridge = peripheral.find("rs_bridge")
+        mon = peripheral.find("monitor") or mon
+
+        if mon then
+            monitorName = peripheral.getName(mon)
+            mon.setTextScale(CONFIG.TEXT_SCALE)
+            applyPalette()
+        end
+
+        refreshData()
+        render()
+    end
 end
