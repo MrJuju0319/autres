@@ -1,7 +1,6 @@
 -- =========================================================
 -- Refined Storage Dashboard
--- Stoneblock 4 / CC:Tweaked / rs_bridge / monitor
--- Auto-update + graphs + infos avancees
+-- Anti-flicker version
 -- =========================================================
 
 -- =========================
@@ -57,7 +56,6 @@ local function autoUpdate()
     end
 
     if oldContent == newContent then
-        print("Aucune mise a jour.")
         fs.delete(AUTO_UPDATE_TMP)
         return
     end
@@ -109,6 +107,9 @@ local history = {
     energy = {},
 }
 
+local lastFrame = {}
+local lastSizeX, lastSizeY = 0, 0
+
 -- =========================
 -- UTILS
 -- =========================
@@ -116,13 +117,6 @@ local function safe(fn, default)
     local ok, res = pcall(fn)
     if ok then return res end
     return default
-end
-
-local function clear()
-    mon.setBackgroundColor(colors.black)
-    mon.setTextColor(colors.white)
-    mon.clear()
-    mon.setCursorPos(1, 1)
 end
 
 local function size()
@@ -135,29 +129,6 @@ local function trim(text, maxLen)
     if #text <= maxLen then return text end
     if maxLen <= 3 then return text:sub(1, maxLen) end
     return text:sub(1, maxLen - 3) .. "..."
-end
-
-local function writeAt(x, y, text, fg, bg)
-    local w, h = size()
-    if y < 1 or y > h then return end
-    if x < 1 then x = 1 end
-
-    mon.setCursorPos(x, y)
-    mon.setBackgroundColor(bg or colors.black)
-    mon.setTextColor(fg or colors.white)
-    mon.write(trim(text, w - x + 1))
-    mon.setBackgroundColor(colors.black)
-end
-
-local function centerText(y, text, fg)
-    local w = size()
-    local x = math.max(1, math.floor((w - #text) / 2) + 1)
-    writeAt(x, y, text, fg)
-end
-
-local function line(y, fg)
-    local w = size()
-    writeAt(1, y, string.rep("-", w), fg or colors.gray)
 end
 
 local function percent(used, total)
@@ -210,37 +181,11 @@ local function pushHistory(tbl, value)
     end
 end
 
-local function drawBar(x, y, width, used, total, fillColor, emptyColor)
-    width = math.max(1, width)
-    used = tonumber(used) or 0
-    total = tonumber(total) or 0
-
-    local filled = 0
-    if total > 0 then
-        filled = math.floor((used / total) * width + 0.5)
-        if filled < 0 then filled = 0 end
-        if filled > width then filled = width end
-    end
-
-    mon.setCursorPos(x, y)
-    mon.setBackgroundColor(emptyColor or colors.gray)
-    mon.write(string.rep(" ", width))
-
-    if filled > 0 then
-        mon.setCursorPos(x, y)
-        mon.setBackgroundColor(fillColor or colors.green)
-        mon.write(string.rep(" ", filled))
-    end
-
-    mon.setBackgroundColor(colors.black)
-end
-
-local function drawMiniGraph(x, y, width, values, color)
+local function graphString(width, values)
     width = math.max(1, width)
     local count = #values
     if count == 0 then
-        writeAt(x, y, string.rep(".", width), colors.gray)
-        return
+        return string.rep(".", width)
     end
 
     local startIndex = math.max(1, count - width + 1)
@@ -258,7 +203,7 @@ local function drawMiniGraph(x, y, width, values, color)
     for i = startIndex, count do
         local ratio = values[i] / maxVal
         if ratio >= 0.875 then
-            chars[#chars + 1] = "\127"
+            chars[#chars + 1] = "#"
         elseif ratio >= 0.625 then
             chars[#chars + 1] = "="
         elseif ratio >= 0.375 then
@@ -274,38 +219,86 @@ local function drawMiniGraph(x, y, width, values, color)
         table.insert(chars, 1, " ")
     end
 
-    writeAt(x, y, table.concat(chars), color or colors.lightBlue)
+    return table.concat(chars)
 end
 
-local function drawMetricBlock(y, title, used, total, unit, graphData)
-    local w = size()
-    local p = percent(used, total)
-    local color = getPercentColor(p)
+local function barString(width, used, total)
+    width = math.max(1, width)
+    used = tonumber(used) or 0
+    total = tonumber(total) or 0
 
-    writeAt(1, y, title, colors.cyan)
-    y = y + 1
-
-    local left = formatNumber(used) .. " / " .. formatNumber(total)
-    if unit and unit ~= "" then
-        left = left .. " " .. unit
+    local filled = 0
+    if total > 0 then
+        filled = math.floor((used / total) * width + 0.5)
+        if filled < 0 then filled = 0 end
+        if filled > width then filled = width end
     end
 
-    local right = tostring(p) .. "%"
-    writeAt(2, y, left, colors.white)
-    writeAt(math.max(2, w - #right + 1), y, right, color)
-    y = y + 1
+    return string.rep("#", filled) .. string.rep("-", width - filled)
+end
 
-    drawBar(2, y, math.max(10, w - 2), used, total > 0 and total or 1, color, colors.gray)
-    y = y + 1
+-- =========================
+-- FRAME BUFFER
+-- =========================
+local function newFrame()
+    local w, h = size()
+    local frame = {}
 
-    writeAt(2, y, "Historique", colors.lightGray)
-    drawMiniGraph(14, y, math.max(8, w - 13), graphData, colors.lightBlue)
-    y = y + 1
+    for y = 1, h do
+        frame[y] = {
+            text = string.rep(" ", w),
+            fg = colors.white,
+            bg = colors.black
+        }
+    end
 
-    line(y)
-    y = y + 1
+    return frame
+end
 
-    return y
+local function writeLine(frame, y, text, fg, bg)
+    local w, h = size()
+    if y < 1 or y > h then return end
+    text = trim(text or "", w)
+    if #text < w then
+        text = text .. string.rep(" ", w - #text)
+    end
+
+    frame[y] = {
+        text = text,
+        fg = fg or colors.white,
+        bg = bg or colors.black
+    }
+end
+
+local function renderFrame(frame)
+    local w, h = size()
+
+    if w ~= lastSizeX or h ~= lastSizeY then
+        mon.setBackgroundColor(colors.black)
+        mon.clear()
+        lastFrame = {}
+        lastSizeX, lastSizeY = w, h
+    end
+
+    for y = 1, h do
+        local old = lastFrame[y]
+        local new = frame[y]
+
+        local changed = (not old)
+            or old.text ~= new.text
+            or old.fg ~= new.fg
+            or old.bg ~= new.bg
+
+        if changed then
+            mon.setCursorPos(1, y)
+            mon.setTextColor(new.fg)
+            mon.setBackgroundColor(new.bg)
+            mon.write(new.text)
+        end
+    end
+
+    mon.setBackgroundColor(colors.black)
+    lastFrame = frame
 end
 
 -- =========================
@@ -342,60 +335,97 @@ local function getData()
 end
 
 -- =========================
--- RENDER
+-- BUILD FRAME
 -- =========================
-local function drawHeader(data)
+local function buildMetric(frame, y, title, used, total, unit, graphData)
     local w = size()
-    writeAt(1, 1, CONFIG.title, colors.cyan)
+    local p = percent(used, total)
+    local color = getPercentColor(p)
 
-    local onlineText = "ONLINE"
-    local onlineColor = colors.lime
+    writeLine(frame, y, title, colors.cyan)
+    y = y + 1
 
-    if data.network.online == false then
-        onlineText = "OFFLINE"
-        onlineColor = colors.red
-    elseif data.network.connected == false then
-        onlineText = "DISCONNECT"
-        onlineColor = colors.orange
+    local left = formatNumber(used) .. " / " .. formatNumber(total)
+    if unit and unit ~= "" then
+        left = left .. " " .. unit
     end
 
-    writeAt(math.max(1, w - #onlineText + 1), 1, onlineText, onlineColor)
-    line(2)
+    local right = tostring(p) .. "%"
+    local middleWidth = math.max(1, w - #right - 1)
+    local line1 = trim(left, middleWidth)
+    if #line1 < middleWidth then
+        line1 = line1 .. string.rep(" ", middleWidth - #line1)
+    end
+    line1 = line1 .. right
+    writeLine(frame, y, line1, color)
+    y = y + 1
+
+    local bar = barString(w, used, total > 0 and total or 1)
+    writeLine(frame, y, bar, color)
+    y = y + 1
+
+    local graphLabel = "Historique: "
+    local graph = graphString(math.max(1, w - #graphLabel), graphData)
+    writeLine(frame, y, graphLabel .. graph, colors.lightBlue)
+    y = y + 1
+
+    writeLine(frame, y, string.rep("-", w), colors.gray)
+    y = y + 1
+
+    return y
 end
 
-local function drawFooter(y, data)
+local function buildFrame(data)
     local w, h = size()
-    if y > h then return end
+    local frame = newFrame()
 
-    local txt = "Types items: " .. tostring(data.items.types)
-        .. " | Types fluides: " .. tostring(data.fluids.types)
+    local statusText = "ONLINE"
+    local statusColor = colors.lime
 
-    writeAt(1, math.min(h, y), trim(txt, w), colors.lightGray)
-end
+    if data.network.online == false then
+        statusText = "OFFLINE"
+        statusColor = colors.red
+    elseif data.network.connected == false then
+        statusText = "DISCONNECT"
+        statusColor = colors.orange
+    end
 
-local function render()
-    clear()
+    local title = trim(CONFIG.title, math.max(1, w - #statusText - 1))
+    local top = title
+    if #top < (w - #statusText) then
+        top = top .. string.rep(" ", (w - #statusText) - #top)
+    end
+    top = trim(top .. statusText, w)
 
-    local data = getData()
-
-    pushHistory(history.items, data.items.used)
-    pushHistory(history.fluids, data.fluids.used)
-    pushHistory(history.energy, data.energy.used)
-
-    drawHeader(data)
+    writeLine(frame, 1, top, colors.cyan)
+    writeLine(frame, 2, string.rep("-", w), colors.gray)
 
     local y = 3
-    y = drawMetricBlock(y, "Items", data.items.used, data.items.total, "", history.items)
-    y = drawMetricBlock(y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
-    y = drawMetricBlock(y, "Energie", data.energy.used, data.energy.total, "FE", history.energy)
+    y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
+    y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
+    y = buildMetric(frame, y, "Energie", data.energy.used, data.energy.total, "FE", history.energy)
 
-    drawFooter(y, data)
+    if y <= h then
+        local footer = "Types items: " .. tostring(data.items.types)
+            .. " | Types fluides: " .. tostring(data.fluids.types)
+        writeLine(frame, y, footer, colors.lightGray)
+    end
+
+    return frame
 end
 
 -- =========================
 -- LOOP
 -- =========================
 while true do
-    render()
+    local data = getData()
+
+    pushHistory(history.items, data.items.used)
+    pushHistory(history.fluids, data.fluids.used)
+    pushHistory(history.energy, data.energy.used)
+
+    local frame = buildFrame(data)
+    renderFrame(frame)
+
     sleep(CONFIG.refreshInterval)
 end
