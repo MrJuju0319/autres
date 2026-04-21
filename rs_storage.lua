@@ -1,12 +1,11 @@
 -- =========================================================
 -- Refined Storage Dashboard
--- Anti-flicker version
+-- Anti-flicker / Auto-update / Cells support
 -- =========================================================
 
 -- =========================
 -- AUTO UPDATE
 -- =========================
-
 local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua"
 local AUTO_UPDATE_ENABLED = true
 local AUTO_UPDATE_FILE = "startup.lua"
@@ -22,11 +21,11 @@ local function autoUpdate()
         return
     end
 
-    print("Verification mise a jour...")
-
     if fs.exists(AUTO_UPDATE_TMP) then
         fs.delete(AUTO_UPDATE_TMP)
     end
+
+    print("Verification mise a jour...")
 
     local ok = pcall(function()
         shell.run("wget", AUTO_UPDATE_URL, AUTO_UPDATE_TMP)
@@ -43,7 +42,9 @@ local function autoUpdate()
 
     if not newContent or newContent == "" then
         print("Fichier telecharge vide.")
-        fs.delete(AUTO_UPDATE_TMP)
+        if fs.exists(AUTO_UPDATE_TMP) then
+            fs.delete(AUTO_UPDATE_TMP)
+        end
         return
     end
 
@@ -66,10 +67,9 @@ local function autoUpdate()
     end
 
     fs.move(AUTO_UPDATE_TMP, AUTO_UPDATE_FILE)
-    print("Mise a jour appliquee, relance...")
+    print("Mise a jour appliquee, redemarrage...")
     sleep(1)
-    shell.run(AUTO_UPDATE_FILE)
-    os.shutdown()
+    os.reboot()
 end
 
 autoUpdate()
@@ -82,15 +82,17 @@ local CONFIG = {
     monitorScale = 0.5,
     refreshInterval = 1,
     historySize = 48,
-    title = "Refined Storage Dashboard v1",
+    title = "Refined Storage Dashboard v2",
+    showCells = true,
+    maxCellsToShow = 8,
 }
 
 -- =========================
 -- PERIPHERALS
 -- =========================
-local bridge = peripheral.find("rs_bridge")
+local bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
 if not bridge then
-    error("rs_bridge non detecte")
+    error("rs_bridge / rsBridge non detecte")
 end
 
 local mon = peripheral.find("monitor")
@@ -133,10 +135,17 @@ local function trim(text, maxLen)
     return text:sub(1, maxLen - 3) .. "..."
 end
 
+local function toNumber(v, default)
+    v = tonumber(v)
+    if v == nil then return default or 0 end
+    return v
+end
+
 local function percent(used, total)
     used = tonumber(used) or 0
     total = tonumber(total) or 0
     if total <= 0 then return 0 end
+
     local p = math.floor((used / total) * 100 + 0.5)
     if p < 0 then p = 0 end
     if p > 100 then p = 100 end
@@ -185,6 +194,7 @@ end
 
 local function graphString(width, values)
     width = math.max(1, width)
+
     local count = #values
     if count == 0 then
         return string.rep(".", width)
@@ -239,6 +249,16 @@ local function barString(width, used, total)
     return string.rep("#", filled) .. string.rep("-", width - filled)
 end
 
+local function firstExisting(tbl, keys, default)
+    if type(tbl) ~= "table" then return default end
+    for _, k in ipairs(keys) do
+        if tbl[k] ~= nil then
+            return tbl[k]
+        end
+    end
+    return default
+end
+
 -- =========================
 -- FRAME BUFFER
 -- =========================
@@ -250,7 +270,7 @@ local function newFrame()
         frame[y] = {
             text = string.rep(" ", w),
             fg = colors.white,
-            bg = colors.black
+            bg = colors.black,
         }
     end
 
@@ -260,6 +280,7 @@ end
 local function writeLine(frame, y, text, fg, bg)
     local w, h = size()
     if y < 1 or y > h then return end
+
     text = trim(text or "", w)
     if #text < w then
         text = text .. string.rep(" ", w - #text)
@@ -268,7 +289,7 @@ local function writeLine(frame, y, text, fg, bg)
     frame[y] = {
         text = text,
         fg = fg or colors.white,
-        bg = bg or colors.black
+        bg = bg or colors.black,
     }
 end
 
@@ -302,37 +323,44 @@ local function renderFrame(frame)
     mon.setBackgroundColor(colors.black)
     lastFrame = frame
 end
-local function toNumber(v, default)
-    v = tonumber(v)
-    if v == nil then return default or 0 end
-    return v
-end
 
-local function firstExisting(tbl, keys, default)
-    if type(tbl) ~= "table" then return default end
-    for _, k in ipairs(keys) do
-        if tbl[k] ~= nil then
-            return tbl[k]
-        end
-    end
-    return default
-end
-
+-- =========================
+-- CELLS
+-- =========================
 local function normalizeCell(cell)
-    local name = tostring(firstExisting(cell, {
-        "displayName", "display_name", "name", "id", "item"
-    }, "Disque inconnu"))
+    local nested = firstExisting(cell, { "resource", "item", "cell" }, nil)
 
-    local stored = toNumber(firstExisting(cell, {
-        "stored", "used", "amount", "count", "value"
-    }, 0), 0)
+    local name = tostring(
+        firstExisting(cell, {
+            "displayName", "display_name", "name", "id"
+        }, nil)
+        or firstExisting(nested, {
+            "displayName", "display_name", "name", "id", "item"
+        }, "Disque inconnu")
+    )
 
-    local capacity = toNumber(firstExisting(cell, {
-        "capacity", "total", "max", "maxStorage", "size"
-    }, 0), 0)
+    local stored = toNumber(
+        firstExisting(cell, {
+            "stored", "used", "amount", "count", "value"
+        }, nil)
+        or firstExisting(nested, {
+            "stored", "used", "amount", "count", "value"
+        }, 0),
+        0
+    )
 
-    local cellType = "autre"
+    local capacity = toNumber(
+        firstExisting(cell, {
+            "capacity", "total", "max", "maxStorage", "size"
+        }, nil)
+        or firstExisting(nested, {
+            "capacity", "total", "max", "maxStorage", "size"
+        }, 0),
+        0
+    )
+
     local lower = string.lower(name)
+    local cellType = "autre"
 
     if lower:find("energy") then
         cellType = "energy"
@@ -349,7 +377,7 @@ local function normalizeCell(cell)
         name = name,
         stored = stored,
         capacity = capacity,
-        type = cellType
+        type = cellType,
     }
 end
 
@@ -367,39 +395,64 @@ local function getCellsData()
         end
     end
 
+    table.sort(cells, function(a, b)
+        if a.type ~= b.type then
+            return a.type < b.type
+        end
+        return a.name < b.name
+    end)
+
     return cells
 end
 
 local function drawCellsSection(frame, y, cells)
     local w, h = size()
 
+    if not CONFIG.showCells then
+        return y
+    end
+
     if y > h then return y end
+
     writeLine(frame, y, "Disques / Cells", colors.cyan)
     y = y + 1
 
     if #cells == 0 then
         writeLine(frame, y, "Aucune info cellule disponible", colors.lightGray)
         y = y + 1
-        writeLine(frame, y, string.rep("-", w), colors.gray)
-        y = y + 1
+        if y <= h then
+            writeLine(frame, y, string.rep("-", w), colors.gray)
+            y = y + 1
+        end
         return y
     end
 
+    local shown = 0
     for i, cell in ipairs(cells) do
+        if shown >= CONFIG.maxCellsToShow then break end
         if y > h - 2 then break end
 
         local label = "[" .. i .. "] " .. cell.name
-        writeLine(frame, y, trim(label, w), colors.yellow)
+        writeLine(frame, y, label, colors.yellow)
         y = y + 1
 
         local valText = formatNumber(cell.stored) .. " / " .. formatNumber(cell.capacity)
         local typeText = "(" .. cell.type .. ")"
-        local line = trim(valText, math.max(1, w - #typeText - 1))
-        if #line < (w - #typeText) then
-            line = line .. string.rep(" ", (w - #typeText) - #line)
+        local leftWidth = math.max(1, w - #typeText - 1)
+
+        local line = trim(valText, leftWidth)
+        if #line < leftWidth then
+            line = line .. string.rep(" ", leftWidth - #line)
         end
         line = trim(line .. typeText, w)
+
         writeLine(frame, y, line, colors.white)
+        y = y + 1
+        shown = shown + 1
+    end
+
+    if #cells > shown and y <= h then
+        writeLine(frame, y, "+" .. tostring(#cells - shown) .. " autres cellules...", colors.lightGray)
         y = y + 1
     end
 
@@ -410,6 +463,7 @@ local function drawCellsSection(frame, y, cells)
 
     return y
 end
+
 -- =========================
 -- DATA
 -- =========================
@@ -435,9 +489,20 @@ local function getData()
     local cells = getCellsData()
 
     return {
-        items = { used = usedItems, total = totalItems, types = itemTypes },
-        fluids = { used = usedFluids, total = totalFluids, types = fluidTypes },
-        energy = { used = energyUsed, total = energyTotal },
+        items = {
+            used = usedItems,
+            total = totalItems,
+            types = itemTypes,
+        },
+        fluids = {
+            used = usedFluids,
+            total = totalFluids,
+            types = fluidTypes,
+        },
+        energy = {
+            used = energyUsed,
+            total = energyTotal,
+        },
         cells = cells,
         network = {
             online = online,
@@ -464,11 +529,13 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
 
     local right = tostring(p) .. "%"
     local middleWidth = math.max(1, w - #right - 1)
+
     local line1 = trim(left, middleWidth)
     if #line1 < middleWidth then
         line1 = line1 .. string.rep(" ", middleWidth - #line1)
     end
     line1 = line1 .. right
+
     writeLine(frame, y, line1, color)
     y = y + 1
 
