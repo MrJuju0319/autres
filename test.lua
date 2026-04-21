@@ -1,3 +1,73 @@
+-- =========================
+-- AUTO UPDATE
+-- =========================
+local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/test.lua"
+local AUTO_UPDATE_ENABLED = true
+local AUTO_UPDATE_FILE = "startup.lua"
+local AUTO_UPDATE_TMP = "startup.lua.tmp"
+
+local function autoUpdate()
+    if not AUTO_UPDATE_ENABLED then
+        return
+    end
+
+    if not http then
+        print("HTTP indisponible, auto-update ignore.")
+        return
+    end
+
+    print("Verification mise a jour...")
+
+    if fs.exists(AUTO_UPDATE_TMP) then
+        fs.delete(AUTO_UPDATE_TMP)
+    end
+
+    local ok = pcall(function()
+        shell.run("wget", AUTO_UPDATE_URL, AUTO_UPDATE_TMP)
+    end)
+
+    if not ok or not fs.exists(AUTO_UPDATE_TMP) then
+        print("Echec du telechargement.")
+        return
+    end
+
+    local h = fs.open(AUTO_UPDATE_TMP, "r")
+    local newContent = h and h.readAll() or nil
+    if h then h.close() end
+
+    if not newContent or newContent == "" then
+        print("Fichier telecharge vide.")
+        fs.delete(AUTO_UPDATE_TMP)
+        return
+    end
+
+    local oldContent = nil
+    if fs.exists(AUTO_UPDATE_FILE) then
+        local old = fs.open(AUTO_UPDATE_FILE, "r")
+        if old then
+            oldContent = old.readAll()
+            old.close()
+        end
+    end
+
+    if oldContent == newContent then
+        print("Aucune mise a jour.")
+        fs.delete(AUTO_UPDATE_TMP)
+        return
+    end
+
+    if fs.exists(AUTO_UPDATE_FILE) then
+        fs.delete(AUTO_UPDATE_FILE)
+    end
+
+    fs.move(AUTO_UPDATE_TMP, AUTO_UPDATE_FILE)
+    print("Mise a jour appliquee, redemarrage...")
+    sleep(1)
+    os.reboot()
+end
+
+autoUpdate()
+
 -- startup.lua
 -- Refined Storage Craft Monitor
 -- Compatible avec ton format getCraftingTasks()
