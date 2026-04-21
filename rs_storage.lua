@@ -84,7 +84,6 @@ local CONFIG = {
     historySize = 48,
     title = "Refined Storage Dashboard v4",
 
-    -- seuils alertes
     itemsWarnPercent = 80,
     itemsDangerPercent = 95,
 
@@ -598,12 +597,14 @@ local function buildFrame(data)
     if y <= h then
         local alerts = buildAlertsLine(data)
         local txt = alerts[1][1] .. " | " .. alerts[2][1] .. " | " .. alerts[3][1]
+
         local color = colors.lime
         if alerts[1][2] == colors.red or alerts[2][2] == colors.red or alerts[3][2] == colors.red then
             color = colors.red
         elseif alerts[1][2] == colors.orange or alerts[2][2] == colors.orange or alerts[3][2] == colors.orange then
             color = colors.orange
         end
+
         writeLine(frame, y, txt, color)
         y = y + 1
     end
