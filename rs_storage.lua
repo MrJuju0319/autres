@@ -1,6 +1,6 @@
 -- =========================================================
--- Refined Storage Dashboard V5
--- Anti-flicker / Auto-update / Multi-pages / Alerts by category
+-- Refined Storage Dashboard V5 - Single Page
+-- Anti-flicker / Auto-update / Alerts / Disk category summary
 -- =========================================================
 
 -- =========================
@@ -89,28 +89,27 @@ local CONFIG = {
     title = "Refined Storage Dashboard v5",
     monitorScale = 0.5,
 
-    -- rafraichissement visuel rapide
     refreshInterval = 1,
-
-    -- donnees lourdes (getItems / getFluids / getCells)
     slowRefreshInterval = 10,
 
-    -- historique
     historySize = 48,
     showGraph = false,
 
-    -- pages
-    autoCyclePages = true,
-    autoCycleSeconds = 12,
-    showDiskDetailsPage = true,
-
-    -- categories vides
+    showDiskCategorySummary = true,
     showEmptyCategories = false,
 
-    -- limite d'affichage sur page details disques
-    maxDisksPerPage = 10,
+    categoryRules = {
+        { key = "energy_disk", label = "Energie",   patterns = { "energy" } },
+        { key = "source",      label = "Source",    patterns = { "source" } },
+        { key = "fluid",       label = "Fluides",   patterns = { "fluid", "liquid" } },
+        { key = "chemical",    label = "Chemical",  patterns = { "chemical" } },
+        { key = "gas",         label = "Gas",       patterns = { "gas" } },
+        { key = "infusion",    label = "Infusion",  patterns = { "infusion" } },
+        { key = "pigment",     label = "Pigment",   patterns = { "pigment" } },
+        { key = "slurry",      label = "Slurry",    patterns = { "slurry" } },
+        { key = "item",        label = "Items",     patterns = { "storage disk", "item disk", "disk" } },
+    },
 
-    -- ordre d'affichage preferentiel
     categoryOrder = {
         item = 1,
         fluid = 2,
@@ -124,27 +123,12 @@ local CONFIG = {
         other = 99,
     },
 
-    -- detection des categories via nom / tags
-    categoryRules = {
-        { key = "energy_disk", label = "Disques energie", patterns = { "energy" } },
-        { key = "source",      label = "Source",           patterns = { "source" } },
-        { key = "fluid",       label = "Disques fluides",  patterns = { "fluid", "liquid" } },
-        { key = "chemical",    label = "Chemical",         patterns = { "chemical" } },
-        { key = "gas",         label = "Gas",              patterns = { "gas" } },
-        { key = "infusion",    label = "Infusion",         patterns = { "infusion" } },
-        { key = "pigment",     label = "Pigment",          patterns = { "pigment" } },
-        { key = "slurry",      label = "Slurry",           patterns = { "slurry" } },
-        { key = "item",        label = "Disques items",    patterns = { "storage disk", "item disk", "disk" } },
-    },
-
     alerts = {
         enabled = {
-            -- vue principale
             items = true,
             fluids = true,
             energy = true,
 
-            -- categories de disques
             item = true,
             fluid = true,
             energy_disk = true,
@@ -154,29 +138,40 @@ local CONFIG = {
             infusion = true,
             pigment = true,
             slurry = true,
-            other = false, -- change a true si tu veux aussi surveiller "other"
+            other = false,
         },
 
         thresholds = {
-            -- vue principale
-            items =      { warn = 80, danger = 95, inverse = false },
-            fluids =     { warn = 80, danger = 95, inverse = false },
-            energy =     { warn = 20, danger = 5,  inverse = true  },
+            items =       { warn = 80, danger = 95, inverse = false },
+            fluids =      { warn = 80, danger = 95, inverse = false },
+            energy =      { warn = 20, danger = 5,  inverse = true  },
 
-            -- categories de disques
-            item =       { warn = 80, danger = 95, inverse = false },
-            fluid =      { warn = 80, danger = 95, inverse = false },
-            energy_disk ={ warn = 20, danger = 5,  inverse = true  },
-            source =     { warn = 80, danger = 95, inverse = false },
-            chemical =   { warn = 80, danger = 95, inverse = false },
-            gas =        { warn = 80, danger = 95, inverse = false },
-            infusion =   { warn = 80, danger = 95, inverse = false },
-            pigment =    { warn = 80, danger = 95, inverse = false },
-            slurry =     { warn = 80, danger = 95, inverse = false },
-            other =      { warn = 90, danger = 98, inverse = false },
+            item =        { warn = 80, danger = 95, inverse = false },
+            fluid =       { warn = 80, danger = 95, inverse = false },
+            energy_disk = { warn = 20, danger = 5,  inverse = true  },
+            source =      { warn = 80, danger = 95, inverse = false },
+            chemical =    { warn = 80, danger = 95, inverse = false },
+            gas =         { warn = 80, danger = 95, inverse = false },
+            infusion =    { warn = 80, danger = 95, inverse = false },
+            pigment =     { warn = 80, danger = 95, inverse = false },
+            slurry =      { warn = 80, danger = 95, inverse = false },
+            other =       { warn = 90, danger = 98, inverse = false },
 
-            default =    { warn = 80, danger = 95, inverse = false },
+            default =     { warn = 80, danger = 95, inverse = false },
         }
+    },
+
+    abbreviations = {
+        item = "ITD",
+        fluid = "FLD",
+        energy_disk = "ENG",
+        source = "SRC",
+        chemical = "CHM",
+        gas = "GAS",
+        infusion = "INF",
+        pigment = "PGM",
+        slurry = "SLR",
+        other = "OTH",
     }
 }
 
@@ -193,7 +188,6 @@ if not mon then
     error("monitor non detecte")
 end
 
-local monitorSide = peripheral.getName(mon)
 mon.setTextScale(CONFIG.monitorScale)
 
 -- =========================
@@ -205,16 +199,8 @@ local history = {
     energy = {},
 }
 
-local ui = {
-    currentPage = 1,
-    autoCycle = CONFIG.autoCyclePages,
-}
-
 local lastFrame = {}
 local lastSizeX, lastSizeY = 0, 0
-local latestData = nil
-local latestPages = {}
-local latestPageCount = 1
 
 local energyStats = {
     lastStored = nil,
@@ -309,7 +295,7 @@ local function formatDuration(seconds)
     end
 
     if seconds > 30 * 24 * 3600 then
-        return ">30j"
+        return "long"
     end
 
     seconds = math.floor(seconds + 0.5)
@@ -418,13 +404,12 @@ local function firstExisting(tbl, keys, default)
     return default
 end
 
-local function lowerContains(s, needle)
-    return string.find(string.lower(s or ""), string.lower(needle), 1, true) ~= nil
+local function categoryOrderIndex(key)
+    return CONFIG.categoryOrder[key] or 999
 end
 
 local function getAlertConfig(key)
-    return CONFIG.alerts.thresholds[key]
-        or CONFIG.alerts.thresholds.default
+    return CONFIG.alerts.thresholds[key] or CONFIG.alerts.thresholds.default
 end
 
 local function isAlertEnabled(key)
@@ -469,10 +454,6 @@ local function buildAlert(key, pct, context)
             return { text = "OK", color = colors.lime, severity = 0, enabled = true }
         end
     end
-end
-
-local function categoryOrderIndex(key)
-    return CONFIG.categoryOrder[key] or 999
 end
 
 -- =========================
@@ -579,24 +560,17 @@ local function parseCapacityFromName(name, categoryKey)
             local powers = { k = 1, m = 2, g = 3, t = 4, e = 5 }
             return tonumber(n) * (1000 ^ (powers[suffix] or 0))
         end
-    end
-
-    if categoryKey == "fluid" then
+    elseif categoryKey == "fluid" then
         local n = lower:match("(%d+)%s*[b]")
         if n then
-            -- buckets -> mB
             return tonumber(n) * 1000
         end
-    end
-
-    if categoryKey == "source" then
+    elseif categoryKey == "source" then
         local n = lower:match("(%d+)%s*[b]")
         if n then
             return tonumber(n)
         end
-    end
-
-    if categoryKey == "energy_disk" then
+    elseif categoryKey == "energy_disk" then
         local n, suffix = lower:match("(%d+)%s*([kmgte])")
         if n and suffix then
             local powers = { k = 1, m = 2, g = 3, t = 4, e = 5 }
@@ -692,8 +666,9 @@ local function getCellsData()
     return cells
 end
 
-local function aggregateCategories(cells)
+local function aggregateCategories(cells, charging)
     local map = {}
+
     for _, cell in ipairs(cells) do
         local key = cell.key or "other"
         if not map[key] then
@@ -713,8 +688,13 @@ local function aggregateCategories(cells)
 
     local categories = {}
     for _, cat in pairs(map) do
-        cat.percent = percent(cat.used, cat.total)
-        cat.alert = buildAlert(cat.key, cat.percent, nil)
+        if cat.total > 0 then
+            cat.percent = percent(cat.used, cat.total)
+        else
+            cat.percent = nil
+        end
+
+        cat.alert = buildAlert(cat.key, cat.percent, { charging = charging })
 
         if CONFIG.showEmptyCategories or cat.used > 0 or cat.total > 0 then
             categories[#categories + 1] = cat
@@ -731,9 +711,11 @@ local function aggregateCategories(cells)
     return categories
 end
 
-local function refreshSlowData(force)
+local function refreshSlowData(charging)
     local t = nowSec()
-    if not force and (t - slowCache.lastRefresh) < CONFIG.slowRefreshInterval then
+    if (t - slowCache.lastRefresh) < CONFIG.slowRefreshInterval then
+        -- on met juste a jour les alertes categories avec le contexte "charging"
+        slowCache.categories = aggregateCategories(slowCache.cells, charging)
         return
     end
 
@@ -743,7 +725,7 @@ local function refreshSlowData(force)
     slowCache.itemTypes = #items
     slowCache.fluidTypes = #fluids
     slowCache.cells = getCellsData()
-    slowCache.categories = aggregateCategories(slowCache.cells)
+    slowCache.categories = aggregateCategories(slowCache.cells, charging)
     slowCache.lastRefresh = t
 end
 
@@ -751,8 +733,6 @@ end
 -- DATA
 -- =========================
 local function getData()
-    refreshSlowData(false)
-
     local usedItems = toNumber(safe(function() return bridge.getUsedItemStorage() end, 0), 0)
     local totalItems = toNumber(safe(function() return bridge.getTotalItemStorage() end, 0), 0)
 
@@ -774,11 +754,12 @@ local function getData()
 
     updateEnergyStats(storedEnergy, avgInput)
 
+    local charging = energyStats.deltaPerSec > 1
+    refreshSlowData(charging)
+
     local pItems = percent(usedItems, totalItems)
     local pFluids = percent(usedFluids, totalFluids)
     local pEnergy = percent(storedEnergy, energyTotal)
-
-    local charging = energyStats.deltaPerSec > 1
 
     local itemAlert = buildAlert("items", pItems, nil)
     local fluidAlert = buildAlert("fluids", pFluids, nil)
@@ -792,17 +773,11 @@ local function getData()
         local remaining = energyTotal - storedEnergy
         if remaining > 0 then
             eta = formatDuration(remaining / energyStats.deltaPerSec)
-            if eta == ">30j" then
-                eta = "long"
-            end
         end
     elseif energyStats.deltaPerSec < -1 then
         trend = "Decharge"
         if storedEnergy > 0 then
             eta = formatDuration(storedEnergy / math.abs(energyStats.deltaPerSec))
-            if eta == ">30j" then
-                eta = "long"
-            end
         end
     end
 
@@ -833,7 +808,6 @@ local function getData()
             alert = energyAlert,
         },
         categories = slowCache.categories,
-        cells = slowCache.cells,
         diskCount = #slowCache.cells,
         network = {
             online = online,
@@ -843,53 +817,20 @@ local function getData()
 end
 
 -- =========================
--- PAGES
--- =========================
-local function buildPages(data)
-    local _, h = size()
-    local pages = {
-        { kind = "overview", label = "Vue d'ensemble" }
-    }
-
-    if #data.categories > 0 then
-        local perPage = math.max(1, h - 5)
-        local start = 1
-        while start <= #data.categories do
-            pages[#pages + 1] = {
-                kind = "categories",
-                label = "Categories disques",
-                start = start,
-                count = perPage,
-            }
-            start = start + perPage
-        end
-    end
-
-    if CONFIG.showDiskDetailsPage and #data.cells > 0 then
-        local perPage = math.max(1, math.min(CONFIG.maxDisksPerPage, h - 5))
-        local start = 1
-        while start <= #data.cells do
-            pages[#pages + 1] = {
-                kind = "disks",
-                label = "Details disques",
-                start = start,
-                count = perPage,
-            }
-            start = start + perPage
-        end
-    end
-
-    return pages
-end
-
--- =========================
 -- BUILD UI
 -- =========================
-local function buildHeader(frame, titleText, statusText, pageNum, pageCount)
+local function buildHeader(frame, data)
     local w = size()
 
-    local right = statusText .. "  P" .. tostring(pageNum) .. "/" .. tostring(pageCount)
-    local left = trim(CONFIG.title .. " - " .. titleText, math.max(1, w - #right - 1))
+    local statusText = "ONLINE"
+    if data.network.online == false then
+        statusText = "OFFLINE"
+    elseif data.network.connected == false then
+        statusText = "DISCONNECT"
+    end
+
+    local right = statusText
+    local left = trim(CONFIG.title, math.max(1, w - #right - 1))
 
     if #left < (w - #right) then
         left = left .. string.rep(" ", (w - #right) - #left)
@@ -897,13 +838,6 @@ local function buildHeader(frame, titleText, statusText, pageNum, pageCount)
 
     writeLine(frame, 1, trim(left .. right, w), colors.cyan)
     writeLine(frame, 2, string.rep("-", w), colors.gray)
-end
-
-local function buildFooter(frame, pageCount)
-    local w, h = size()
-    local autoTxt = ui.autoCycle and "AUTO ON" or "AUTO OFF"
-    local footer = "[<] page | [A] " .. autoTxt .. " | [>] page"
-    writeLine(frame, h, trim(footer, w), colors.lightGray)
 end
 
 local function buildMetric(frame, y, title, used, total, unit, alert, graphData)
@@ -922,8 +856,7 @@ local function buildMetric(frame, y, title, used, total, unit, alert, graphData)
         left = left .. " " .. unit
     end
 
-    local alertText = alert and alert.text or "N/A"
-    local right = tostring(p) .. "% " .. alertText
+    local right = tostring(p) .. "% " .. (alert and alert.text or "N/A")
     local middleWidth = math.max(1, w - #right - 1)
 
     local line1 = trim(left, middleWidth)
@@ -932,8 +865,7 @@ local function buildMetric(frame, y, title, used, total, unit, alert, graphData)
     end
     line1 = line1 .. right
 
-    local lineColor = alert and alert.color or color
-    writeLine(frame, y, line1, lineColor)
+    writeLine(frame, y, line1, alert and alert.color or color)
     y = y + 1
     if y > h - 1 then return y end
 
@@ -997,213 +929,117 @@ local function buildEnergySection(frame, y, energy)
     return y
 end
 
-local function buildOverviewPage(frame, data, pageNum, pageCount, titleText)
-    local statusText = "ONLINE"
-    if data.network.online == false then
-        statusText = "OFFLINE"
-    elseif data.network.connected == false then
-        statusText = "DISCONNECT"
+local function buildMainAlertLine(data)
+    local sev = math.max(
+        data.items.alert.severity or 0,
+        data.fluids.alert.severity or 0,
+        data.energy.alert.severity or 0
+    )
+
+    local color = colors.lime
+    if sev >= 2 then
+        color = colors.red
+    elseif sev == 1 then
+        color = colors.orange
     end
 
-    buildHeader(frame, titleText, statusText, pageNum, pageCount)
+    return
+        "ITM:" .. data.items.alert.text ..
+        " | FLD:" .. data.fluids.alert.text ..
+        " | NRG:" .. data.energy.alert.text,
+        color
+end
+
+local function buildCategoryCountsLine(categories)
+    local parts = {}
+    local hidden = 0
+
+    for _, cat in ipairs(categories) do
+        local abbr = CONFIG.abbreviations[cat.key] or string.upper(string.sub(cat.key, 1, 3))
+        local piece = abbr .. "x" .. tostring(cat.count)
+        parts[#parts + 1] = piece
+    end
+
+    return "Cats: " .. table.concat(parts, " | ")
+end
+
+local function buildCategoryWarnLine(categories)
+    local parts = {}
+    local warningCount = 0
+
+    for _, cat in ipairs(categories) do
+        if cat.alert.enabled and (cat.alert.severity or 0) > 0 then
+            local abbr = CONFIG.abbreviations[cat.key] or string.upper(string.sub(cat.key, 1, 3))
+            parts[#parts + 1] = abbr .. ":" .. cat.alert.text
+            warningCount = warningCount + 1
+        end
+    end
+
+    if #parts == 0 then
+        return "Cat warn: aucune", colors.lime
+    end
+
+    local color = colors.orange
+    for _, cat in ipairs(categories) do
+        if cat.alert.enabled and (cat.alert.severity or 0) >= 2 then
+            color = colors.red
+            break
+        end
+    end
+
+    return "Cat warn: " .. table.concat(parts, " | "), color
+end
+
+local function buildFrame(data)
+    local _, h = size()
+    local frame = newFrame()
+
+    buildHeader(frame, data)
 
     local y = 3
     y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", data.items.alert, history.items)
     y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", data.fluids.alert, history.fluids)
     y = buildEnergySection(frame, y, data.energy)
 
-    local _, h = size()
-    if y <= h - 2 then
-        local summary = "ITM:" .. data.items.alert.text .. " | FLD:" .. data.fluids.alert.text .. " | NRG:" .. data.energy.alert.text
-        local sev = math.max(data.items.alert.severity or 0, data.fluids.alert.severity or 0, data.energy.alert.severity or 0)
-        local summaryColor = colors.lime
-        if sev >= 2 then
-            summaryColor = colors.red
-        elseif sev == 1 then
-            summaryColor = colors.orange
-        elseif (not data.items.alert.enabled) and (not data.fluids.alert.enabled) and (not data.energy.alert.enabled) then
-            summaryColor = colors.gray
-        end
-        writeLine(frame, y, summary, summaryColor)
+    if y <= h - 1 then
+        local txt, color = buildMainAlertLine(data)
+        writeLine(frame, y, txt, color)
         y = y + 1
     end
 
-    if y <= h - 2 then
-        local footerInfo = "Types items: " .. tostring(data.items.types) .. " | Types fluides: " .. tostring(data.fluids.types) .. " | Disques: " .. tostring(data.diskCount)
-        writeLine(frame, y, footerInfo, colors.lightGray)
-    end
-
-    buildFooter(frame, pageCount)
-end
-
-local function buildCategoriesPage(frame, data, page, pageNum, pageCount)
-    local statusText = "CATS"
-    buildHeader(frame, page.label, statusText, pageNum, pageCount)
-
-    local _, h = size()
-    local y = 3
-
-    writeLine(frame, y, "Categories detectees via getCells()", colors.cyan)
-    y = y + 1
-    writeLine(frame, y, string.rep("-", size()), colors.gray)
-    y = y + 1
-
-    local startIndex = page.start
-    local endIndex = math.min(#data.categories, startIndex + page.count - 1)
-
-    for i = startIndex, endIndex do
-        if y > h - 2 then break end
-        local cat = data.categories[i]
-        local pctText = (cat.total > 0) and (tostring(cat.percent) .. "%") or "n/a"
-        local alertText = cat.alert.text
-        local left = cat.label .. " x" .. tostring(cat.count)
-        local mid = formatNumber(cat.used) .. "/" .. formatNumber(cat.total)
-        local right = pctText .. " " .. alertText
-
-        local line = left .. " | " .. mid .. " | " .. right
-        writeLine(frame, y, line, cat.alert.color)
+    if CONFIG.showDiskCategorySummary and y <= h - 1 then
+        writeLine(frame, y, buildCategoryCountsLine(data.categories), colors.lightGray)
         y = y + 1
     end
 
-    if y <= h - 2 then
-        local info = "Categories: " .. tostring(#data.categories) .. " | Cells: " .. tostring(#data.cells)
-        writeLine(frame, y, info, colors.lightGray)
-    end
-
-    buildFooter(frame, pageCount)
-end
-
-local function buildDisksPage(frame, data, page, pageNum, pageCount)
-    local statusText = "DISKS"
-    buildHeader(frame, page.label, statusText, pageNum, pageCount)
-
-    local _, h = size()
-    local y = 3
-
-    writeLine(frame, y, "Details disques detectes", colors.cyan)
-    y = y + 1
-    writeLine(frame, y, string.rep("-", size()), colors.gray)
-    y = y + 1
-
-    local startIndex = page.start
-    local endIndex = math.min(#data.cells, startIndex + page.count - 1)
-
-    for i = startIndex, endIndex do
-        if y > h - 2 then break end
-        local c = data.cells[i]
-        local line = "[" .. i .. "] " .. c.name
-            .. " | " .. formatNumber(c.stored) .. "/" .. formatNumber(c.capacity)
-            .. " | " .. c.label
-        writeLine(frame, y, line, colors.yellow)
+    if CONFIG.showDiskCategorySummary and y <= h - 1 then
+        local txt, color = buildCategoryWarnLine(data.categories)
+        writeLine(frame, y, txt, color)
         y = y + 1
     end
 
-    if y <= h - 2 then
-        local info = "Affiche " .. tostring(startIndex) .. "-" .. tostring(endIndex) .. " / " .. tostring(#data.cells)
-        writeLine(frame, y, info, colors.lightGray)
-    end
-
-    buildFooter(frame, pageCount)
-end
-
-local function buildFrame(data, page, pageNum, pageCount)
-    local frame = newFrame()
-
-    if page.kind == "overview" then
-        buildOverviewPage(frame, data, pageNum, pageCount, page.label)
-    elseif page.kind == "categories" then
-        buildCategoriesPage(frame, data, page, pageNum, pageCount)
-    elseif page.kind == "disks" then
-        buildDisksPage(frame, data, page, pageNum, pageCount)
-    else
-        buildOverviewPage(frame, data, pageNum, pageCount, "Vue d'ensemble")
+    if y <= h - 1 then
+        local footer = "Types items: " .. tostring(data.items.types)
+            .. " | Types fluides: " .. tostring(data.fluids.types)
+            .. " | Disques: " .. tostring(data.diskCount)
+        writeLine(frame, y, footer, colors.lightGray)
     end
 
     return frame
 end
 
 -- =========================
--- NAVIGATION
+-- LOOP
 -- =========================
-local function clampPage()
-    if ui.currentPage < 1 then ui.currentPage = 1 end
-    if ui.currentPage > latestPageCount then ui.currentPage = latestPageCount end
+while true do
+    local data = getData()
+
+    pushHistory(history.items, data.items.used)
+    pushHistory(history.fluids, data.fluids.used)
+    pushHistory(history.energy, data.energy.stored)
+
+    local frame = buildFrame(data)
+    renderFrame(frame)
+
+    sleep(CONFIG.refreshInterval)
 end
-
-local function nextPage()
-    ui.currentPage = ui.currentPage + 1
-    if ui.currentPage > latestPageCount then
-        ui.currentPage = 1
-    end
-end
-
-local function prevPage()
-    ui.currentPage = ui.currentPage - 1
-    if ui.currentPage < 1 then
-        ui.currentPage = latestPageCount
-    end
-end
-
-local function handleTouch(x, y)
-    local w, h = size()
-    if y ~= h then
-        return
-    end
-
-    local third = math.floor(w / 3)
-    if x <= third then
-        ui.autoCycle = false
-        prevPage()
-    elseif x <= third * 2 then
-        ui.autoCycle = not ui.autoCycle
-    else
-        ui.autoCycle = false
-        nextPage()
-    end
-end
-
--- =========================
--- LOOPS
--- =========================
-local function renderLoop()
-    while true do
-        latestData = getData()
-
-        pushHistory(history.items, latestData.items.used)
-        pushHistory(history.fluids, latestData.fluids.used)
-        pushHistory(history.energy, latestData.energy.stored)
-
-        latestPages = buildPages(latestData)
-        latestPageCount = math.max(1, #latestPages)
-        clampPage()
-
-        local page = latestPages[ui.currentPage] or latestPages[1]
-        local frame = buildFrame(latestData, page, ui.currentPage, latestPageCount)
-        renderFrame(frame)
-
-        sleep(CONFIG.refreshInterval)
-    end
-end
-
-local function autoPageLoop()
-    while true do
-        sleep(CONFIG.autoCycleSeconds)
-        if ui.autoCycle and latestPageCount > 1 then
-            nextPage()
-        end
-    end
-end
-
-local function eventLoop()
-    while true do
-        local ev, side, x, y = os.pullEvent()
-
-        if ev == "monitor_touch" and side == monitorSide then
-            handleTouch(x, y)
-        elseif ev == "monitor_resize" then
-            slowCache.lastRefresh = 0
-        end
-    end
-end
-
-parallel.waitForAny(renderLoop, autoPageLoop, eventLoop)
