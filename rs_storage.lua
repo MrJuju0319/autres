@@ -302,7 +302,114 @@ local function renderFrame(frame)
     mon.setBackgroundColor(colors.black)
     lastFrame = frame
 end
+local function toNumber(v, default)
+    v = tonumber(v)
+    if v == nil then return default or 0 end
+    return v
+end
 
+local function firstExisting(tbl, keys, default)
+    if type(tbl) ~= "table" then return default end
+    for _, k in ipairs(keys) do
+        if tbl[k] ~= nil then
+            return tbl[k]
+        end
+    end
+    return default
+end
+
+local function normalizeCell(cell)
+    local name = tostring(firstExisting(cell, {
+        "displayName", "display_name", "name", "id", "item"
+    }, "Disque inconnu"))
+
+    local stored = toNumber(firstExisting(cell, {
+        "stored", "used", "amount", "count", "value"
+    }, 0), 0)
+
+    local capacity = toNumber(firstExisting(cell, {
+        "capacity", "total", "max", "maxStorage", "size"
+    }, 0), 0)
+
+    local cellType = "autre"
+    local lower = string.lower(name)
+
+    if lower:find("energy") then
+        cellType = "energy"
+    elseif lower:find("fluid") then
+        cellType = "fluid"
+    elseif lower:find("source") then
+        cellType = "source"
+    elseif lower:find("storage disk") or lower:find("disk") then
+        cellType = "item"
+    end
+
+    return {
+        raw = cell,
+        name = name,
+        stored = stored,
+        capacity = capacity,
+        type = cellType
+    }
+end
+
+local function getCellsData()
+    local rawCells = safe(function() return bridge.getCells() end, {}) or {}
+    local cells = {}
+
+    if type(rawCells) ~= "table" then
+        return cells
+    end
+
+    for _, cell in ipairs(rawCells) do
+        if type(cell) == "table" then
+            cells[#cells + 1] = normalizeCell(cell)
+        end
+    end
+
+    return cells
+end
+
+local function drawCellsSection(frame, y, cells)
+    local w, h = size()
+
+    if y > h then return y end
+    writeLine(frame, y, "Disques / Cells", colors.cyan)
+    y = y + 1
+
+    if #cells == 0 then
+        writeLine(frame, y, "Aucune info cellule disponible", colors.lightGray)
+        y = y + 1
+        writeLine(frame, y, string.rep("-", w), colors.gray)
+        y = y + 1
+        return y
+    end
+
+    for i, cell in ipairs(cells) do
+        if y > h - 2 then break end
+
+        local label = "[" .. i .. "] " .. cell.name
+        writeLine(frame, y, trim(label, w), colors.yellow)
+        y = y + 1
+
+        local valText = formatNumber(cell.stored) .. " / " .. formatNumber(cell.capacity)
+        local typeText = "(" .. cell.type .. ")"
+        local line = trim(valText, math.max(1, w - #typeText - 1))
+        if #line < (w - #typeText) then
+            line = line .. string.rep(" ", (w - #typeText) - #line)
+        end
+        line = trim(line .. typeText, w)
+        writeLine(frame, y, line, colors.white)
+        y = y + 1
+    end
+
+    if y <= h then
+        writeLine(frame, y, string.rep("-", w), colors.gray)
+        y = y + 1
+    end
+
+    return y
+end
 -- =========================
 -- DATA
 -- =========================
@@ -325,10 +432,13 @@ local function getData()
     local online = safe(function() return bridge.isOnline() end, nil)
     local connected = safe(function() return bridge.isConnected() end, nil)
 
+    local cells = getCellsData()
+
     return {
         items = { used = usedItems, total = totalItems, types = itemTypes },
         fluids = { used = usedFluids, total = totalFluids, types = fluidTypes },
         energy = { used = energyUsed, total = energyTotal },
+        cells = cells,
         network = {
             online = online,
             connected = connected,
@@ -386,14 +496,10 @@ local function buildFrame(data)
     local frame = newFrame()
 
     local statusText = "ONLINE"
-    local statusColor = colors.lime
-
     if data.network.online == false then
         statusText = "OFFLINE"
-        statusColor = colors.red
     elseif data.network.connected == false then
         statusText = "DISCONNECT"
-        statusColor = colors.orange
     end
 
     local title = trim(CONFIG.title, math.max(1, w - #statusText - 1))
@@ -410,6 +516,8 @@ local function buildFrame(data)
     y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
     y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
     y = buildMetric(frame, y, "Energie", data.energy.used, data.energy.total, "FE", history.energy)
+
+    y = drawCellsSection(frame, y, data.cells)
 
     if y <= h then
         local footer = "Types items: " .. tostring(data.items.types)
