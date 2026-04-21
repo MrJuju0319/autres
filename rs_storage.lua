@@ -1,6 +1,7 @@
 -- =========================================================
 -- Refined Storage Dashboard
--- Anti-flicker / Auto-update / Cells support
+-- Focus stockage + energie utile
+-- Anti-flicker / Auto-update
 -- =========================================================
 
 -- =========================
@@ -82,9 +83,7 @@ local CONFIG = {
     monitorScale = 0.5,
     refreshInterval = 1,
     historySize = 48,
-    title = "Refined Storage Dashboard v2",
-    showCells = true,
-    maxCellsToShow = 8,
+    title = "Refined Storage Dashboard v3",
 }
 
 -- =========================
@@ -113,6 +112,14 @@ local history = {
 
 local lastFrame = {}
 local lastSizeX, lastSizeY = 0, 0
+
+local energyStats = {
+    lastStored = nil,
+    lastTime = nil,
+    deltaPerSec = 0,
+    inputAvg = 0,
+    outputEst = 0,
+}
 
 -- =========================
 -- UTILS
@@ -249,16 +256,6 @@ local function barString(width, used, total)
     return string.rep("#", filled) .. string.rep("-", width - filled)
 end
 
-local function firstExisting(tbl, keys, default)
-    if type(tbl) ~= "table" then return default end
-    for _, k in ipairs(keys) do
-        if tbl[k] ~= nil then
-            return tbl[k]
-        end
-    end
-    return default
-end
-
 -- =========================
 -- FRAME BUFFER
 -- =========================
@@ -325,157 +322,49 @@ local function renderFrame(frame)
 end
 
 -- =========================
--- CELLS
--- =========================
-local function normalizeCell(cell)
-    local nested = firstExisting(cell, { "resource", "item", "cell" }, nil)
-
-    local name = tostring(
-        firstExisting(cell, {
-            "displayName", "display_name", "name", "id"
-        }, nil)
-        or firstExisting(nested, {
-            "displayName", "display_name", "name", "id", "item"
-        }, "Disque inconnu")
-    )
-
-    local stored = toNumber(
-        firstExisting(cell, {
-            "stored", "used", "amount", "count", "value"
-        }, nil)
-        or firstExisting(nested, {
-            "stored", "used", "amount", "count", "value"
-        }, 0),
-        0
-    )
-
-    local capacity = toNumber(
-        firstExisting(cell, {
-            "capacity", "total", "max", "maxStorage", "size"
-        }, nil)
-        or firstExisting(nested, {
-            "capacity", "total", "max", "maxStorage", "size"
-        }, 0),
-        0
-    )
-
-    local lower = string.lower(name)
-    local cellType = "autre"
-
-    if lower:find("energy") then
-        cellType = "energy"
-    elseif lower:find("fluid") then
-        cellType = "fluid"
-    elseif lower:find("source") then
-        cellType = "source"
-    elseif lower:find("storage disk") or lower:find("disk") then
-        cellType = "item"
-    end
-
-    return {
-        raw = cell,
-        name = name,
-        stored = stored,
-        capacity = capacity,
-        type = cellType,
-    }
-end
-
-local function getCellsData()
-    local rawCells = safe(function() return bridge.getCells() end, {}) or {}
-    local cells = {}
-
-    if type(rawCells) ~= "table" then
-        return cells
-    end
-
-    for _, cell in ipairs(rawCells) do
-        if type(cell) == "table" then
-            cells[#cells + 1] = normalizeCell(cell)
-        end
-    end
-
-    table.sort(cells, function(a, b)
-        if a.type ~= b.type then
-            return a.type < b.type
-        end
-        return a.name < b.name
-    end)
-
-    return cells
-end
-
-local function drawCellsSection(frame, y, cells)
-    local w, h = size()
-
-    if not CONFIG.showCells then
-        return y
-    end
-
-    if y > h then return y end
-
-    writeLine(frame, y, "Disques / Cells", colors.cyan)
-    y = y + 1
-
-    if #cells == 0 then
-        writeLine(frame, y, "Aucune info cellule disponible", colors.lightGray)
-        y = y + 1
-        if y <= h then
-            writeLine(frame, y, string.rep("-", w), colors.gray)
-            y = y + 1
-        end
-        return y
-    end
-
-    local shown = 0
-    for i, cell in ipairs(cells) do
-        if shown >= CONFIG.maxCellsToShow then break end
-        if y > h - 2 then break end
-
-        local label = "[" .. i .. "] " .. cell.name
-        writeLine(frame, y, label, colors.yellow)
-        y = y + 1
-
-        local valText = formatNumber(cell.stored) .. " / " .. formatNumber(cell.capacity)
-        local typeText = "(" .. cell.type .. ")"
-        local leftWidth = math.max(1, w - #typeText - 1)
-
-        local line = trim(valText, leftWidth)
-        if #line < leftWidth then
-            line = line .. string.rep(" ", leftWidth - #line)
-        end
-        line = trim(line .. typeText, w)
-
-        writeLine(frame, y, line, colors.white)
-        y = y + 1
-        shown = shown + 1
-    end
-
-    if #cells > shown and y <= h then
-        writeLine(frame, y, "+" .. tostring(#cells - shown) .. " autres cellules...", colors.lightGray)
-        y = y + 1
-    end
-
-    if y <= h then
-        writeLine(frame, y, string.rep("-", w), colors.gray)
-        y = y + 1
-    end
-
-    return y
-end
-
--- =========================
 -- DATA
 -- =========================
+local function updateEnergyStats(storedEnergy, avgInput)
+    local now = os.epoch("utc") / 1000
+
+    storedEnergy = tonumber(storedEnergy) or 0
+    avgInput = tonumber(avgInput) or 0
+
+    if energyStats.lastStored ~= nil and energyStats.lastTime ~= nil then
+        local dt = now - energyStats.lastTime
+        if dt > 0 then
+            local delta = storedEnergy - energyStats.lastStored
+            local instantDeltaPerSec = delta / dt
+
+            -- lissage simple
+            energyStats.deltaPerSec = (energyStats.deltaPerSec * 0.7) + (instantDeltaPerSec * 0.3)
+        end
+    end
+
+    energyStats.lastStored = storedEnergy
+    energyStats.lastTime = now
+    energyStats.inputAvg = avgInput
+
+    -- OUT estime = IN - delta_stock
+    energyStats.outputEst = avgInput - energyStats.deltaPerSec
+end
+
 local function getData()
-    local usedItems = tonumber(safe(function() return bridge.getUsedItemStorage() end, 0)) or 0
-    local totalItems = tonumber(safe(function() return bridge.getTotalItemStorage() end, 0)) or 0
+    local usedItems = toNumber(safe(function() return bridge.getUsedItemStorage() end, 0), 0)
+    local totalItems = toNumber(safe(function() return bridge.getTotalItemStorage() end, 0), 0)
 
-    local usedFluids = tonumber(safe(function() return bridge.getUsedFluidStorage() end, 0)) or 0
-    local totalFluids = tonumber(safe(function() return bridge.getTotalFluidStorage() end, 0)) or 0
+    local usedFluids = toNumber(safe(function() return bridge.getUsedFluidStorage() end, 0), 0)
+    local totalFluids = toNumber(safe(function() return bridge.getTotalFluidStorage() end, 0), 0)
 
-    local energyUsed = tonumber(safe(function() return bridge.getEnergyUsage() end, 0)) or 0
-    local energyTotal = tonumber(safe(function() return bridge.getEnergyCapacity() end, 0)) or 0
+    local storedEnergy = toNumber(
+        safe(function() return bridge.getStoredEnergy() end,
+            safe(function() return bridge.getEnergyUsage() end, 0)
+        ),
+        0
+    )
+
+    local energyTotal = toNumber(safe(function() return bridge.getEnergyCapacity() end, 0), 0)
+    local avgInput = toNumber(safe(function() return bridge.getAverageEnergyInput() end, 0), 0)
 
     local items = safe(function() return bridge.getItems() end, {}) or {}
     local fluids = safe(function() return bridge.getFluids() end, {}) or {}
@@ -486,7 +375,7 @@ local function getData()
     local online = safe(function() return bridge.isOnline() end, nil)
     local connected = safe(function() return bridge.isConnected() end, nil)
 
-    local cells = getCellsData()
+    updateEnergyStats(storedEnergy, avgInput)
 
     return {
         items = {
@@ -500,10 +389,12 @@ local function getData()
             types = fluidTypes,
         },
         energy = {
-            used = energyUsed,
+            stored = storedEnergy,
             total = energyTotal,
+            inputAvg = energyStats.inputAvg,
+            outputEst = energyStats.outputEst,
+            deltaPerSec = energyStats.deltaPerSec,
         },
-        cells = cells,
         network = {
             online = online,
             connected = connected,
@@ -558,6 +449,49 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
     return y
 end
 
+local function buildEnergySection(frame, y, energy)
+    local w = size()
+    local p = percent(energy.stored, energy.total)
+    local color = getPercentColor(p)
+
+    writeLine(frame, y, "Energie", colors.cyan)
+    y = y + 1
+
+    local left = formatNumber(energy.stored) .. " / " .. formatNumber(energy.total) .. " FE"
+    local right = tostring(p) .. "%"
+    local middleWidth = math.max(1, w - #right - 1)
+
+    local line1 = trim(left, middleWidth)
+    if #line1 < middleWidth then
+        line1 = line1 .. string.rep(" ", middleWidth - #line1)
+    end
+    line1 = line1 .. right
+    writeLine(frame, y, line1, color)
+    y = y + 1
+
+    writeLine(frame, y, barString(w, energy.stored, energy.total > 0 and energy.total or 1), color)
+    y = y + 1
+
+    local inText = "IN: " .. formatNumber(energy.inputAvg) .. "/s"
+    local outText = "OUT est: " .. formatNumber(math.max(0, energy.outputEst)) .. "/s"
+    local line2 = inText .. " | " .. outText
+    writeLine(frame, y, line2, colors.lightBlue)
+    y = y + 1
+
+    local deltaPrefix = "Delta: "
+    local deltaValue = formatNumber(energy.deltaPerSec) .. "/s"
+    if energy.deltaPerSec > 0 then
+        deltaValue = "+" .. deltaValue
+    end
+    writeLine(frame, y, deltaPrefix .. deltaValue, colors.lightGray)
+    y = y + 1
+
+    writeLine(frame, y, string.rep("-", w), colors.gray)
+    y = y + 1
+
+    return y
+end
+
 local function buildFrame(data)
     local w, h = size()
     local frame = newFrame()
@@ -582,9 +516,7 @@ local function buildFrame(data)
     local y = 3
     y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
     y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
-    y = buildMetric(frame, y, "Energie", data.energy.used, data.energy.total, "FE", history.energy)
-
-    y = drawCellsSection(frame, y, data.cells)
+    y = buildEnergySection(frame, y, data.energy)
 
     if y <= h then
         local footer = "Types items: " .. tostring(data.items.types)
@@ -603,7 +535,7 @@ while true do
 
     pushHistory(history.items, data.items.used)
     pushHistory(history.fluids, data.fluids.used)
-    pushHistory(history.energy, data.energy.used)
+    pushHistory(history.energy, data.energy.stored)
 
     local frame = buildFrame(data)
     renderFrame(frame)
