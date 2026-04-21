@@ -201,6 +201,11 @@ local function formatDuration(seconds)
         return "--"
     end
 
+    -- au dela de 30 jours, on considere que ce n'est pas exploitable
+    if seconds > 30 * 24 * 3600 then
+        return ">30j"
+    end
+
     seconds = math.floor(seconds + 0.5)
 
     local d = math.floor(seconds / 86400)
@@ -551,7 +556,11 @@ local function buildEnergySection(frame, y, energy)
     writeLine(frame, y, "Net: " .. formatRate(energy.deltaPerSec) .. " | " .. trend, colors.lightBlue)
     y = y + 1
 
-    writeLine(frame, y, "ETA: " .. eta, colors.lightGray)
+    local etaLabel = "ETA: " .. eta
+    if eta == ">30j" then
+        etaLabel = "ETA: long"
+    end
+    writeLine(frame, y, etaLabel, colors.lightGray)
     y = y + 1
 
     writeLine(frame, y, string.rep("-", w), colors.gray)
@@ -561,11 +570,23 @@ local function buildEnergySection(frame, y, energy)
 end
 
 local function buildAlertsLine(data)
-    return {
-        getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false),
-        getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false),
-        getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true),
-    }
+    local itemAlert = getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false)
+    local fluidAlert = getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false)
+
+    local energyAlert
+    if data.energy.percent <= CONFIG.energyDangerLowPercent then
+        if data.energy.deltaPerSec > 0 then
+            energyAlert = { "NRG: LOW+", colors.orange }
+        else
+            energyAlert = { "NRG: CRIT", colors.red }
+        end
+    elseif data.energy.percent <= CONFIG.energyWarnLowPercent then
+        energyAlert = { "NRG: LOW", colors.orange }
+    else
+        energyAlert = { "NRG: OK", colors.lime }
+    end
+
+    return { itemAlert, fluidAlert, energyAlert }
 end
 
 local function buildFrame(data)
