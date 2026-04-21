@@ -9,8 +9,8 @@
 
 local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua"
 local AUTO_UPDATE_ENABLED = true
-local AUTO_UPDATE_FILE = "rs_storage.lua"
-local AUTO_UPDATE_TMP = "rs_storage.lua.tmp"
+local AUTO_UPDATE_FILE = "startup.lua"
+local AUTO_UPDATE_TMP = "startup.lua.tmp"
 
 local function autoUpdate()
     if not AUTO_UPDATE_ENABLED then
