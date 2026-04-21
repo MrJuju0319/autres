@@ -301,19 +301,19 @@ end
 local function getAlertLabel(name, p, warn, danger, inverse)
     if inverse then
         if p <= danger then
-            return name .. ": CRIT", colors.red
+            return { name .. ": CRIT", colors.red }
         elseif p <= warn then
-            return name .. ": LOW", colors.orange
+            return { name .. ": LOW", colors.orange }
         else
-            return name .. ": OK", colors.lime
+            return { name .. ": OK", colors.lime }
         end
     else
         if p >= danger then
-            return name .. ": CRIT", colors.red
+            return { name .. ": CRIT", colors.red }
         elseif p >= warn then
-            return name .. ": WARN", colors.orange
+            return { name .. ": WARN", colors.orange }
         else
-            return name .. ": OK", colors.lime
+            return { name .. ": OK", colors.lime }
         end
     end
 end
@@ -562,17 +562,11 @@ local function buildEnergySection(frame, y, energy)
 end
 
 local function buildAlertsLine(data)
-    local parts = {}
-
-    local itemsText = getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false)
-    local fluidsText = getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false)
-    local energyText = getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true)
-
-    table.insert(parts, itemsText)
-    table.insert(parts, fluidsText)
-    table.insert(parts, energyText)
-
-    return parts
+    return {
+        getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false),
+        getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false),
+        getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true),
+    }
 end
 
 local function buildFrame(data)
