@@ -6,6 +6,7 @@
 -- =========================
 -- AUTO UPDATE
 -- =========================
+
 local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua"
 local AUTO_UPDATE_ENABLED = true
 local AUTO_UPDATE_FILE = "rs_storage.lua"
@@ -77,6 +78,7 @@ autoUpdate()
 -- CONFIG
 -- =========================
 local CONFIG = {
+    showGraph = false,
     monitorScale = 0.5,
     refreshInterval = 1,
     historySize = 48,
@@ -364,15 +366,11 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
     writeLine(frame, y, bar, color)
     y = y + 1
 
+if CONFIG.showGraph then
     local graphLabel = "Historique: "
     local graph = graphString(math.max(1, w - #graphLabel), graphData)
     writeLine(frame, y, graphLabel .. graph, colors.lightBlue)
     y = y + 1
-
-    writeLine(frame, y, string.rep("-", w), colors.gray)
-    y = y + 1
-
-    return y
 end
 
 local function buildFrame(data)
