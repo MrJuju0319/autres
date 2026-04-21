@@ -1,191 +1,199 @@
 -- rs_debug.lua
--- Debug complet du peripheral rs_bridge
+-- Debug complet RS Bridge pour CC:Tweaked / Advanced Peripherals
 
-local BRIDGE_TYPE = "rs_bridge"
+local BRIDGE_TYPES = { "rs_bridge", "rsBridge" }
 local OUTPUT_FILE = "rs_debug_output.txt"
-
-local bridge = peripheral.find(BRIDGE_TYPE)
-if not bridge then
-    error("rs_bridge non detecte")
-end
-
-local function safeCall(fn)
-    local ok, a, b, c, d, e = pcall(fn)
-    if ok then
-        return true, {a, b, c, d, e}
-    end
-    return false, {a}
-end
-
-local function serialize(value)
-    return textutils.serialize(value, { compact = false })
-end
 
 local out = {}
 
-local function log(line)
-    line = tostring(line or "")
-    out[#out + 1] = line
-    print(line)
+local function log(msg)
+  msg = tostring(msg or "")
+  print(msg)
+  table.insert(out, msg)
 end
 
-local function logSection(title)
-    log("")
-    log(string.rep("=", 60))
-    log(title)
-    log(string.rep("=", 60))
+local function section(title)
+  log("")
+  log(string.rep("=", 70))
+  log(title)
+  log(string.rep("=", 70))
 end
 
-local function dumpValue(name, value)
-    log(name .. " =")
-    log(serialize(value))
+local function safeCall(fn)
+  local ok, a, b, c, d, e = pcall(fn)
+  if ok then
+    return true, { a, b, c, d, e }
+  else
+    return false, { a }
+  end
 end
 
-local function listPeripheralNames()
-    logSection("PERIPHERIQUES DETECTES")
-    for _, name in ipairs(peripheral.getNames()) do
-        log(("- %s -> %s"):format(name, tostring(peripheral.getType(name))))
-    end
+local function serialize(v)
+  return textutils.serialize(v, { compact = false })
 end
 
-local function listBridgeMethods()
-    logSection("METHODES DU RS_BRIDGE")
+-- helper inspire de ton wrapPs, mais corrige
+local function wrapPs(peripheralType)
+  local periTab = {}
+  local sideTab = {}
 
-    local methods = peripheral.getMethods(peripheral.getName(bridge) or "unknown")
-    if not methods then
-        log("Impossible de recuperer la liste via peripheral.getMethods")
-        return
-    end
+  if peripheralType == nil then
+    return nil, nil
+  end
 
-    table.sort(methods)
-    for _, method in ipairs(methods) do
-        log("- " .. method)
+  local peripherals = peripheral.getNames()
+  local i2 = 1
+
+  for i = 1, #peripherals do
+    local pName = peripherals[i]
+    if peripheral.getType(pName) == peripheralType then
+      periTab[i2] = peripheral.wrap(pName)
+      sideTab[i2] = pName
+      i2 = i2 + 1
     end
+  end
+
+  if #periTab > 0 then
+    return periTab, sideTab
+  end
+
+  return nil, nil
 end
 
-local function tryMethod(methodName, ...)
-    logSection("TEST METHODE : " .. methodName)
-
-    if type(bridge[methodName]) ~= "function" then
-        log("Methode absente")
-        return nil
+local function findBridge()
+  for _, t in ipairs(BRIDGE_TYPES) do
+    local tabs, sides = wrapPs(t)
+    if tabs and tabs[1] then
+      return tabs[1], sides[1], t
     end
+  end
+  return nil, nil, nil
+end
 
-    local args = {...}
-    local ok, results = safeCall(function()
-        return bridge[methodName](table.unpack(args))
-    end)
+local bridge, bridgeSide, bridgeType = findBridge()
+if not bridge then
+  error("Aucun RS Bridge detecte (types testes: rs_bridge, rsBridge)")
+end
 
-    if ok then
-        log("Appel OK")
-        dumpValue("resultat", results[1])
-        return results[1]
-    else
-        log("Erreur : " .. tostring(results[1]))
-        return nil
-    end
+section("INFOS BRIDGE")
+log("Type detecte : " .. tostring(bridgeType))
+log("Nom / side    : " .. tostring(bridgeSide))
+
+section("PERIPHERIQUES DETECTES")
+for _, name in ipairs(peripheral.getNames()) do
+  log(("- %s -> %s"):format(name, tostring(peripheral.getType(name))))
+end
+
+section("METHODES DU BRIDGE")
+local methods = peripheral.getMethods(bridgeSide) or {}
+table.sort(methods)
+for _, m in ipairs(methods) do
+  log("- " .. m)
+end
+
+local function tryBridgeMethod(methodName, ...)
+  section("TEST METHODE : " .. methodName)
+
+  if type(bridge[methodName]) ~= "function" then
+    log("Methode absente")
+    return nil
+  end
+
+  local args = { ... }
+  local ok, res = safeCall(function()
+    return bridge[methodName](table.unpack(args))
+  end)
+
+  if ok then
+    log("Appel OK")
+    log(serialize(res[1]))
+    return res[1]
+  else
+    log("Erreur : " .. tostring(res[1]))
+    return nil
+  end
 end
 
 local function inspectTask(task, index)
-    logSection("INSPECTION TASK #" .. tostring(index))
+  section("INSPECTION TASK #" .. tostring(index))
+  log("RAW TASK :")
+  log(serialize(task))
 
-    dumpValue("task_raw", task)
+  if type(task) ~= "table" then
+    log("La task n'est pas une table")
+    return
+  end
 
-    if type(task) ~= "table" then
-        log("Task non-table")
-        return
+  local keys = {}
+  for k, _ in pairs(task) do
+    table.insert(keys, k)
+  end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+
+  log("")
+  log("CLES DE LA TASK :")
+  for _, k in ipairs(keys) do
+    log((" - %s (%s)"):format(tostring(k), type(task[k])))
+  end
+
+  log("")
+  log("APPEL DES METHODES DE LA TASK :")
+  for _, k in ipairs(keys) do
+    if type(task[k]) == "function" then
+      local ok, res = safeCall(function()
+        return task[k]()
+      end)
+
+      if ok then
+        log("")
+        log("task." .. tostring(k) .. "() ->")
+        log(serialize(res[1]))
+      else
+        log("")
+        log("task." .. tostring(k) .. "() -> ERREUR")
+        log(tostring(res[1]))
+      end
     end
-
-    local keys = {}
-    for k, _ in pairs(task) do
-        keys[#keys + 1] = tostring(k)
-    end
-    table.sort(keys)
-
-    log("Cles de la task :")
-    for _, k in ipairs(keys) do
-        local v = task[k]
-        log((" - %s (%s)"):format(k, type(v)))
-    end
-
-    for _, k in ipairs(keys) do
-        if type(task[k]) == "function" then
-            local ok, results = safeCall(function()
-                return task[k]()
-            end)
-
-            if ok then
-                log("")
-                log("Appel task:" .. k .. "() OK")
-                log(serialize(results[1]))
-            else
-                log("")
-                log("Appel task:" .. k .. "() ERREUR")
-                log(tostring(results[1]))
-            end
-        end
-    end
+  end
 end
 
-local function inspectTasks(tasks)
-    logSection("INSPECTION DES TASKS")
+-- méthodes utiles d'après la doc / ton script
+local tasks = tryBridgeMethod("getCraftingTasks")
+tryBridgeMethod("listCraftableItems")
+tryBridgeMethod("listItems")
+tryBridgeMethod("listFluids")
+tryBridgeMethod("getEnergyStorage")
+tryBridgeMethod("getMaxEnergyStorage")
+tryBridgeMethod("getMaxItemDiskStorage")
+tryBridgeMethod("getMaxFluidDiskStorage")
+tryBridgeMethod("getItem", { name = "minecraft:oak_planks" })
+tryBridgeMethod("isItemCraftable", { name = "minecraft:oak_planks" })
+tryBridgeMethod("isItemCrafting", { name = "minecraft:oak_planks" })
+tryBridgeMethod("getPattern", { name = "minecraft:oak_planks" })
 
-    if type(tasks) ~= "table" then
-        log("getCraftingTasks n'a pas retourne une table")
-        return
-    end
+section("INSPECTION DES TASKS")
+if type(tasks) == "table" then
+  log("Nombre de tasks: " .. tostring(#tasks))
+  log("DUMP BRUT:")
+  log(serialize(tasks))
 
-    log("Nombre de tasks: " .. tostring(#tasks))
-    dumpValue("tasks_brut", tasks)
-
-    for i, task in ipairs(tasks) do
-        inspectTask(task, i)
-    end
+  for i, task in ipairs(tasks) do
+    inspectTask(task, i)
+  end
+else
+  log("getCraftingTasks ne retourne pas de table exploitable")
 end
 
-local function saveToFile(path)
-    local h = fs.open(path, "w")
-    if not h then
-        error("Impossible d'ecrire dans " .. path)
-    end
-
-    for _, line in ipairs(out) do
-        h.writeLine(line)
-    end
-
-    h.close()
+section("ECRITURE FICHIER")
+local fh = fs.open(OUTPUT_FILE, "w")
+if not fh then
+  error("Impossible d'ecrire " .. OUTPUT_FILE)
 end
 
--- =========================
--- EXECUTION
--- =========================
+for _, line in ipairs(out) do
+  fh.writeLine(line)
+end
+fh.close()
 
-logSection("DEBUG RS BRIDGE")
-log("Nom peripheral : " .. tostring(peripheral.getName(bridge)))
-log("Type peripheral: " .. tostring(peripheral.getType(peripheral.getName(bridge))))
-
-listPeripheralNames()
-listBridgeMethods()
-
--- Appels les plus probables / utiles
-local tasks = tryMethod("getCraftingTasks")
-tryMethod("listCraftingTasks")
-tryMethod("isConnected")
-tryMethod("getPattern")
-tryMethod("getPatterns")
-tryMethod("listItems")
-tryMethod("getItem", { name = "minecraft:stone", count = 1 })
-tryMethod("listFluids")
-tryMethod("listCraftableItems")
-tryMethod("listCraftables")
-tryMethod("getEnergyStorage")
-tryMethod("getMaxEnergyStorage")
-tryMethod("getDiskCapacity")
-tryMethod("getDiskUsage")
-
-inspectTasks(tasks)
-
-saveToFile(OUTPUT_FILE)
-
-logSection("TERMINE")
-log("Sortie enregistree dans : " .. OUTPUT_FILE)
+log("Fichier cree : " .. OUTPUT_FILE)
+log("Commande utile : edit " .. OUTPUT_FILE)
