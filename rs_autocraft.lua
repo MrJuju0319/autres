@@ -16,6 +16,8 @@ local CONFIG = {
 
     TITLE = "Refined Storage - Autocraft v5",
     TEXT_SCALE = 0.5,
+    SIDE_PADDING = 2,
+    HEADER_HEIGHT = 4,
     REFRESH_INTERVAL = 0.75,
     PAGE_ROTATE_EVERY = 8,
     ETA_SMOOTHING = 0.35,
@@ -579,6 +581,7 @@ local function drawHeader(termObj, stats, w)
     fillLine(termObj, 1, colors.gray)
     fillLine(termObj, 2, colors.black)
     fillLine(termObj, 3, colors.black)
+    fillLine(termObj, 4, colors.black)
 
     local spinner = SPINNER[((state.frame - 1) % #SPINNER) + 1]
     writeAt(termObj, 2, 1, spinner .. " " .. trim(CONFIG.TITLE, math.max(1, w - 22)), colors.white, colors.gray)
@@ -586,17 +589,20 @@ local function drawHeader(termObj, stats, w)
     local jobText = "Jobs " .. tostring(stats.jobs)
     writeAt(termObj, math.max(1, w - #jobText - 1), 1, jobText .. " ", colors.cyan, colors.gray)
 
+    local summaryLeft = string.format("Actifs %d", stats.running)
+    local summaryMid = string.format("Attente %d", stats.waiting)
+    local summaryRight = string.format("Termines %d", stats.done)
+    writeAt(termObj, 2, 2, summaryLeft, colors.orange, colors.black)
+    centerText(termObj, 2, summaryMid, colors.lightGray, colors.black)
+    writeAt(termObj, math.max(2, w - #summaryRight - 1), 2, summaryRight, colors.lime, colors.black)
+
     local barLabel = tostring(math.floor(stats.percent * 100 + 0.5)) .. "%"
-    drawProgressBar(termObj, 2, 2, math.max(10, w - 2), stats.percent, colors.green, colors.gray, barLabel)
+    drawProgressBar(termObj, 3, 3, math.max(10, w - 4), stats.percent, colors.green, colors.gray, barLabel)
 
-    local summary = string.format(
-        "Done %d  Run %d  Wait %d",
-        stats.done, stats.running, stats.waiting
-    )
-    writeAt(termObj, 2, 3, trim(summary, w - 2), colors.lightGray, colors.black)
-
-    local sortLabel = "Tri:" .. SORT_MODES[state.sortIndex].label
-    writeAt(termObj, math.max(2, w - #sortLabel - 1), 3, sortLabel, colors.lightBlue, colors.black)
+    local sortLabel = "Tri: " .. SORT_MODES[state.sortIndex].label
+    local viewLabel = "Vue: " .. VIEW_MODES[state.viewIndex].label
+    writeAt(termObj, 2, 4, sortLabel, colors.lightBlue, colors.black)
+    writeAt(termObj, math.max(2, w - #viewLabel - 1), 4, viewLabel, colors.lightBlue, colors.black)
 end
 
 local function drawTaskCardDetail(termObj, task, index, x, y, w)
@@ -607,35 +613,39 @@ local function drawTaskCardDetail(termObj, task, index, x, y, w)
     local percent = math.floor(completion * 100 + 0.5)
     local icon = getTaskIcon(task)
 
-    fillLine(termObj, y, colors.gray)
-    fillLine(termObj, y + 1, colors.black)
+    fillLine(termObj, y, colors.black)
+    fillLine(termObj, y + 1, colors.gray)
     fillLine(termObj, y + 2, colors.black)
     fillLine(termObj, y + 3, colors.black)
-    fillLine(termObj, y + 4, colors.gray)
+    fillLine(termObj, y + 4, colors.black)
+    fillLine(termObj, y + 5, colors.black)
+
+    local innerX = x + CONFIG.SIDE_PADDING
+    local innerW = math.max(10, w - (CONFIG.SIDE_PADDING * 2))
 
     local title = string.format(" %02d [%s] %s", index, icon, name)
-    writeAt(termObj, x, y, trim(title, w), colors.white, colors.gray)
+    writeAt(termObj, innerX, y + 1, trim(title, innerW), colors.white, colors.gray)
 
-    writeAt(termObj, x + 1, y + 1, "Etat: " .. status, statusColor, colors.black, w - 2)
+    writeAt(termObj, innerX, y + 2, "Etat: " .. status, statusColor, colors.black, innerW)
     local etaText = "ETA " .. formatTime(eta)
-    writeAt(termObj, math.max(x + 1, x + w - #etaText), y + 1, etaText, colors.lightBlue, colors.black)
+    writeAt(termObj, math.max(innerX, innerX + innerW - #etaText), y + 2, etaText, colors.lightBlue, colors.black)
 
     drawProgressBar(
         termObj,
-        x + 1,
-        y + 2,
-        math.max(10, w - 2),
+        innerX,
+        y + 3,
+        innerW,
         completion,
         (completion >= 1 and colors.lime) or (completion > 0 and colors.orange) or colors.gray,
         colors.gray,
         percent .. "%"
     )
 
-    local info = string.format("Fait: %s / %s", formatNumber(current), formatNumber(total))
-    writeAt(termObj, x + 1, y + 3, trim(info, w - 2), colors.white, colors.black)
+    local info = string.format("Progression: %s / %s", formatNumber(current), formatNumber(total))
+    writeAt(termObj, innerX, y + 4, trim(info, innerW), colors.white, colors.black)
 
     local raw = getTaskRawName(task)
-    writeAt(termObj, x + 1, y + 4, trim(raw, w - 2), colors.lightGray, colors.gray)
+    writeAt(termObj, innerX, y + 5, trim(raw, innerW), colors.lightGray, colors.black)
 end
 
 local function drawTaskCardCompact(termObj, task, index, x, y, w)
@@ -646,24 +656,28 @@ local function drawTaskCardCompact(termObj, task, index, x, y, w)
     local percent = math.floor(completion * 100 + 0.5)
     local icon = getTaskIcon(task)
 
-    fillLine(termObj, y, colors.gray)
-    fillLine(termObj, y + 1, colors.black)
-    fillLine(termObj, y + 2, colors.gray)
+    fillLine(termObj, y, colors.black)
+    fillLine(termObj, y + 1, colors.gray)
+    fillLine(termObj, y + 2, colors.black)
+    fillLine(termObj, y + 3, colors.black)
+
+    local innerX = x + CONFIG.SIDE_PADDING
+    local innerW = math.max(10, w - (CONFIG.SIDE_PADDING * 2))
 
     local header = string.format(" %02d [%s] %s", index, icon, name)
-    writeAt(termObj, x, y, trim(header, w), colors.white, colors.gray)
+    writeAt(termObj, innerX, y + 1, trim(header, innerW), colors.white, colors.gray)
 
     local bodyLeft = string.format("%s  %s/%s", status, formatNumber(current), formatNumber(total))
-    writeAt(termObj, x + 1, y + 1, trim(bodyLeft, w - 14), statusColor, colors.black)
+    writeAt(termObj, innerX, y + 2, trim(bodyLeft, innerW - 14), statusColor, colors.black)
 
-    local bodyRight = percent .. "% " .. formatTime(eta)
-    writeAt(termObj, math.max(x + 1, x + w - #bodyRight), y + 1, bodyRight, colors.lightBlue, colors.black)
+    local bodyRight = percent .. "%  " .. formatTime(eta)
+    writeAt(termObj, math.max(innerX, innerX + innerW - #bodyRight), y + 2, bodyRight, colors.lightBlue, colors.black)
 
     drawProgressBar(
         termObj,
-        x + 1,
-        y + 2,
-        math.max(10, w - 2),
+        innerX,
+        y + 3,
+        innerW,
         completion,
         (completion >= 1 and colors.lime) or (completion > 0 and colors.orange) or colors.gray,
         colors.gray,
@@ -678,7 +692,7 @@ local function drawEmptyState(termObj, w, h)
 
     if state.lastError then
         centerText(termObj, math.floor(h / 2) - 1, "Source indisponible", colors.red, colors.black)
-        centerText(termObj, math.floor(h / 2) + 1, trim(state.lastError, w - 2), colors.lightGray, colors.black)
+        centerText(termObj, math.floor(h / 2), trim(state.lastError, w - 6), colors.lightGray, colors.black)
     else
         centerText(termObj, math.floor(h / 2) - 1, "Aucun craft en cours", colors.lime, colors.black)
         centerText(termObj, math.floor(h / 2) + 1, "Le reseau est calme.", colors.lightGray, colors.black)
@@ -690,34 +704,35 @@ local function drawFooter(termObj, w, h, totalPages)
         return
     end
 
+    fillLine(termObj, h - 1, colors.black)
     fillLine(termObj, h, colors.black)
 
     local left = 2
-    left = left + drawButton(termObj, left, h, "TRI", false) + 1
-    left = left + drawButton(termObj, left, h, "VUE", false) + 1
+    left = left + drawButton(termObj, left, h, "TRI", false) + 2
+    left = left + drawButton(termObj, left, h, "VUE", false) + 2
 
     local pageText = string.format("Page %d/%d", state.page, totalPages)
     writeAt(termObj, math.max(left, w - #pageText - 1), h, pageText, colors.cyan, colors.black)
 end
 
 local function getLayout(h)
-    local top = 4
-    local footer = (CONFIG.SHOW_FOOTER and h >= 8) and 1 or 0
+    local top = CONFIG.HEADER_HEIGHT + 1
+    local footer = (CONFIG.SHOW_FOOTER and h >= 9) and 2 or 0
     local usable = h - top - footer + 1
 
     if VIEW_MODES[state.viewIndex].key == "detail" then
         return {
             top = top,
             footer = footer,
-            cardHeight = 5,
-            perPage = math.max(1, math.floor(usable / 5))
+            cardHeight = 6,
+            perPage = math.max(1, math.floor(usable / 6))
         }
     else
         return {
             top = top,
             footer = footer,
-            cardHeight = 3,
-            perPage = math.max(1, math.floor(usable / 3))
+            cardHeight = 4,
+            perPage = math.max(1, math.floor(usable / 4))
         }
     end
 end
