@@ -366,13 +366,19 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
     writeLine(frame, y, bar, color)
     y = y + 1
 
-if CONFIG.showGraph then
-    writeLine(frame, y, "Historique:", colors.lightGray)
+    if CONFIG.showGraph then
+        writeLine(frame, y, "Historique:", colors.lightGray)
+        y = y + 1
+
+        local graph = graphString(w, graphData)
+        writeLine(frame, y, graph, colors.lightBlue)
+        y = y + 1
+    end
+
+    writeLine(frame, y, string.rep("-", w), colors.gray)
     y = y + 1
 
-    local graph = graphString(w, graphData)
-    writeLine(frame, y, graph, colors.lightBlue)
-    y = y + 1
+    return y
 end
 
 local function buildFrame(data)
