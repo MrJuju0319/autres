@@ -82,7 +82,7 @@ local CONFIG = {
     monitorScale = 0.5,
     refreshInterval = 1,
     historySize = 48,
-    title = "Refined Storage Dashboard",
+    title = "Refined Storage Dashboard v1",
 }
 
 -- =========================
