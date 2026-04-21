@@ -367,9 +367,11 @@ local function buildMetric(frame, y, title, used, total, unit, graphData)
     y = y + 1
 
 if CONFIG.showGraph then
-    local graphLabel = "Historique: "
-    local graph = graphString(math.max(1, w - #graphLabel), graphData)
-    writeLine(frame, y, graphLabel .. graph, colors.lightBlue)
+    writeLine(frame, y, "Historique:", colors.lightGray)
+    y = y + 1
+
+    local graph = graphString(w, graphData)
+    writeLine(frame, y, graph, colors.lightBlue)
     y = y + 1
 end
 
