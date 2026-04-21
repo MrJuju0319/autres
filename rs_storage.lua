@@ -893,13 +893,10 @@ local function drawHeader(termObj, data, w)
     writeAt(termObj, 2, 1, trim(CONFIG.TITLE, math.max(1, w - #status - 4)), colors.white, colors.gray)
     writeAt(termObj, math.max(2, w - #status - 1), 1, status, colors.cyan, colors.gray)
 
-    local left = "Types I " .. tostring(data.items.types)
-    local mid = "Disques " .. tostring(data.diskCount)
-    local right = "Types F " .. tostring(data.fluids.types)
-
-    writeAt(termObj, 2, 2, left, colors.lightBlue, colors.black)
-    centerText(termObj, 2, mid, colors.lightGray, colors.black)
-    writeAt(termObj, math.max(2, w - #right - 1), 2, right, colors.lightBlue, colors.black)
+    local meta = "Types I " .. tostring(data.items.types)
+        .. " | Types F " .. tostring(data.fluids.types)
+        .. " | Disques " .. tostring(data.diskCount)
+    centerText(termObj, 2, trim(meta, w - 4), colors.lightGray, colors.black)
 
     local occ = math.max(data.items.percent or 0, data.fluids.percent or 0)
     local label = "Occupation max " .. tostring(occ) .. "%"
@@ -912,30 +909,28 @@ local function drawHeader(termObj, data, w)
     writeAt(termObj, math.max(2, w - #modeText - 1), 4, modeText, colors.lightBlue, colors.black)
 end
 
-local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, extra2, y, w, unit)
+local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, extra2, x, y, w, unit)
     fillLine(termObj, y, colors.gray)
     fillLine(termObj, y + 1, colors.black)
     fillLine(termObj, y + 2, colors.black)
     fillLine(termObj, y + 3, colors.black)
-    fillLine(termObj, y + 4, colors.black)
 
-    local innerX = 2
+    local innerX = x + 1
     local innerW = math.max(10, w - 2)
 
     local headRight = tostring(pct) .. "% " .. (alert and alert.text or "N/A")
-    writeAt(termObj, innerX, y, title, colors.white, colors.gray, innerW - #headRight - 1)
-    writeAt(termObj, math.max(innerX, w - #headRight), y, headRight, alert and alert.color or colors.lightGray, colors.gray)
+    writeAt(termObj, innerX, y, title, colors.white, colors.gray, math.max(1, innerW - #headRight - 1))
+    writeAt(termObj, math.max(innerX, x + w - #headRight), y, headRight, alert and alert.color or colors.lightGray, colors.gray)
 
     local main = formatNumber(used) .. " / " .. formatNumber(total)
     if unit and unit ~= "" then
         main = main .. " " .. unit
     end
-    writeAt(termObj, innerX, y + 1, main, colors.white, colors.black)
+    writeAt(termObj, innerX, y + 1, trim(main, innerW), colors.white, colors.black)
 
-    drawProgressBar(termObj, innerX, y + 2, w - 2, pct / 100, getPercentColor(pct), colors.gray, "")
+    drawProgressBar(termObj, innerX, y + 2, innerW, pct / 100, getPercentColor(pct), colors.gray, "")
 
-    writeAt(termObj, innerX, y + 3, trim(extra1 or "", innerW), colors.lightBlue, colors.black)
-    writeAt(termObj, innerX, y + 4, trim(extra2 or "", innerW), colors.lightGray, colors.black)
+    writeAt(termObj, innerX, y + 3, trim(extra1 or "", innerW), colors.lightGray, colors.black)
 end
 
 local function buildCategoryCountsLine(categories, maxWidth)
@@ -994,8 +989,18 @@ local function drawScreen(data)
 
     drawHeader(termObj, data, w)
 
-    local y = CONFIG.HEADER_HEIGHT + 1
+    local top = CONFIG.HEADER_HEIGHT + 1
+    local gutter = 2
 
+    local leftW = math.floor((w - gutter) / 2)
+    local rightW = w - leftW - gutter
+
+    local leftX = 1
+    local rightX = leftW + gutter + 1
+
+    local cardH = 4
+
+    -- Items gauche
     drawMetricCard(
         termObj,
         "Items",
@@ -1004,13 +1009,14 @@ local function drawScreen(data)
         data.items.percent,
         data.items.alert,
         "Types: " .. tostring(data.items.types),
-        "Alerte: " .. data.items.alert.text,
-        y,
-        w,
+        nil,
+        leftX,
+        top,
+        leftW,
         ""
     )
-    y = y + 5
 
+    -- Fluides droite
     drawMetricCard(
         termObj,
         "Fluides",
@@ -1019,28 +1025,39 @@ local function drawScreen(data)
         data.fluids.percent,
         data.fluids.alert,
         "Types: " .. tostring(data.fluids.types),
-        "Alerte: " .. data.fluids.alert.text,
-        y,
-        w,
+        nil,
+        rightX,
+        top,
+        rightW,
         "mB"
     )
-    y = y + 5
 
-    drawMetricCard(
-        termObj,
-        "Energie",
-        data.energy.stored,
-        data.energy.total,
-        data.energy.percent,
-        data.energy.alert,
-        "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend,
-        "ETA: " .. data.energy.eta,
-        y,
-        w,
-        "FE"
-    )
-    y = y + 5
+    -- Energie pleine largeur dessous
+    local energyY = top + cardH + 1
 
+    fillLine(termObj, energyY, colors.gray)
+    fillLine(termObj, energyY + 1, colors.black)
+    fillLine(termObj, energyY + 2, colors.black)
+    fillLine(termObj, energyY + 3, colors.black)
+    fillLine(termObj, energyY + 4, colors.black)
+
+    local innerX = 2
+    local innerW = math.max(10, w - 2)
+
+    local headRight = tostring(data.energy.percent) .. "% " .. data.energy.alert.text
+    writeAt(termObj, innerX, energyY, "Energie", colors.white, colors.gray, math.max(1, innerW - #headRight - 1))
+    writeAt(termObj, math.max(innerX, w - #headRight), energyY, headRight, data.energy.alert.color, colors.gray)
+
+    local energyMain = formatNumber(data.energy.stored) .. " / " .. formatNumber(data.energy.total) .. " FE"
+    writeAt(termObj, innerX, energyY + 1, trim(energyMain, innerW), colors.white, colors.black)
+
+    drawProgressBar(termObj, innerX, energyY + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
+
+    writeAt(termObj, innerX, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
+    writeAt(termObj, innerX, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
+
+    -- Zone synthese
+    local y = energyY + 6
     local maxBodyY = h - (CONFIG.SHOW_FOOTER and 2 or 0)
 
     while y <= maxBodyY do
@@ -1048,7 +1065,7 @@ local function drawScreen(data)
         y = y + 1
     end
 
-    y = CONFIG.HEADER_HEIGHT + 16
+    y = energyY + 6
 
     if state.showAlertSummary and y <= maxBodyY then
         local summary = "Synthese alertes: ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
@@ -1057,9 +1074,14 @@ local function drawScreen(data)
             data.fluids.alert.severity or 0,
             data.energy.alert.severity or 0
         )
+
         local color = colors.lime
-        if severity >= 2 then color = colors.red
-        elseif severity >= 1 then color = colors.orange end
+        if severity >= 2 then
+            color = colors.red
+        elseif severity >= 1 then
+            color = colors.orange
+        end
+
         writeAt(termObj, 2, y, trim(summary, w - 2), color, colors.black)
         y = y + 1
     end
