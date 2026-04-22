@@ -113,6 +113,16 @@ local CONFIG = {
 -- =========================
 -- AUTO UPDATE
 -- =========================
+local function getCurrentFile()
+    if shell and shell.getRunningProgram then
+        local p = shell.getRunningProgram()
+        if p and p ~= "" then
+            return p
+        end
+    end
+    return CONFIG.AUTO_UPDATE_FILE
+end
+
 local function readFile(path)
     if not fs.exists(path) then
         return nil
@@ -183,18 +193,19 @@ local function autoUpdate()
         return
     end
 
-    local localContent = readFile(CONFIG.AUTO_UPDATE_FILE)
+    local currentFile = getCurrentFile()
+    local localContent = readFile(currentFile)
     if localContent == remote then
         print("Auto-update: aucune mise a jour.")
         return
     end
 
     if writeFile(CONFIG.AUTO_UPDATE_TMP, remote) then
-        if fs.exists(CONFIG.AUTO_UPDATE_FILE) then
-            fs.delete(CONFIG.AUTO_UPDATE_FILE)
+        if fs.exists(currentFile) then
+            fs.delete(currentFile)
         end
 
-        fs.move(CONFIG.AUTO_UPDATE_TMP, CONFIG.AUTO_UPDATE_FILE)
+        fs.move(CONFIG.AUTO_UPDATE_TMP, currentFile)
         print("Auto-update: mise a jour appliquee, reboot...")
         sleep(1)
         os.reboot()
@@ -219,7 +230,6 @@ if not mon then
 end
 
 mon.setTextScale(CONFIG.TEXT_SCALE)
-
 local monitorName = peripheral.getName(mon)
 
 -- =========================
@@ -824,8 +834,6 @@ local function applyPalette()
     end)
 end
 
-applyPalette()
-
 local function getBuffer()
     local w, h = mon.getSize()
 
@@ -898,7 +906,7 @@ local function drawHeader(termObj, data, w)
         .. " | Disques " .. tostring(data.diskCount)
     centerText(termObj, 2, trim(meta, w - 4), colors.lightGray, colors.black)
 
-    local occ = math.max(data.items.percent or 0, data.fluids.percent or 0)
+    local occ = math.max(data.items.percent or 0, data.fluids.percent or 0, data.energy.percent or 0)
     local label = "Occupation max " .. tostring(occ) .. "%"
     drawProgressBar(termObj, 3, 3, math.max(10, w - 4), occ / 100, colors.green, colors.gray, label)
 
@@ -909,7 +917,7 @@ local function drawHeader(termObj, data, w)
     writeAt(termObj, math.max(2, w - #modeText - 1), 4, modeText, colors.lightBlue, colors.black)
 end
 
-local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, extra2, x, y, w, unit)
+local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, x, y, w, unit)
     fillLine(termObj, y, colors.gray)
     fillLine(termObj, y + 1, colors.black)
     fillLine(termObj, y + 2, colors.black)
@@ -1000,7 +1008,6 @@ local function drawScreen(data)
 
     local cardH = 4
 
-    -- Items gauche
     drawMetricCard(
         termObj,
         "Items",
@@ -1009,14 +1016,12 @@ local function drawScreen(data)
         data.items.percent,
         data.items.alert,
         "Types: " .. tostring(data.items.types),
-        nil,
         leftX,
         top,
         leftW,
         ""
     )
 
-    -- Fluides droite
     drawMetricCard(
         termObj,
         "Fluides",
@@ -1025,14 +1030,12 @@ local function drawScreen(data)
         data.fluids.percent,
         data.fluids.alert,
         "Types: " .. tostring(data.fluids.types),
-        nil,
         rightX,
         top,
         rightW,
         "mB"
     )
 
-    -- Energie pleine largeur dessous
     local energyY = top + cardH + 1
 
     fillLine(termObj, energyY, colors.gray)
@@ -1056,7 +1059,6 @@ local function drawScreen(data)
     writeAt(termObj, innerX, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
     writeAt(termObj, innerX, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
 
-    -- Zone synthese
     local y = energyY + 6
     local maxBodyY = h - (CONFIG.SHOW_FOOTER and 2 or 0)
 
@@ -1108,7 +1110,7 @@ end
 -- INTERACTIONS
 -- =========================
 local function handleTouch(x, y)
-    local w, h = mon.getSize()
+    local _, h = mon.getSize()
 
     if CONFIG.SHOW_FOOTER and y == h then
         if x >= 2 and x <= 7 then
@@ -1123,7 +1125,6 @@ local function handleTouch(x, y)
         end
     end
 
-    -- tap ailleurs = refresh lent force
     cache.slowLastRefresh = 0
 end
 
