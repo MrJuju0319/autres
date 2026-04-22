@@ -1,220 +1,144 @@
 -- =========================================================
--- Refined Storage Storage Dashboard v8
--- Single page / clean layout / anti-flicker
--- CC:Tweaked + rs_bridge
+-- Refined Storage Dashboard V4
+-- Anti-flicker / Auto-update / Alerts / ETA / Trend
 -- =========================================================
-
--- =========================
--- CONFIG
--- =========================
-local CONFIG = {
-    AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua",
-    AUTO_UPDATE_ENABLED = true,
-
-    TITLE = "Refined Storage - Storage v8",
-    TEXT_SCALE = 0.5,
-    REFRESH_INTERVAL = 1.0,
-    SLOW_REFRESH_INTERVAL = 10,
-    ETA_SMOOTHING = 0.35,
-    USE_CUSTOM_PALETTE = true,
-    SHOW_FOOTER = true,
-
-    SHOW_ALERT_SUMMARY = true,
-    SHOW_CATEGORY_SUMMARY = true,
-    SHOW_EMPTY_CATEGORIES = false,
-
-    CATEGORY_RULES = {
-        { key = "energy_disk", label = "Energie",  patterns = { "energy" } },
-        { key = "source",      label = "Source",   patterns = { "source" } },
-        { key = "fluid",       label = "Fluides",  patterns = { "fluid", "liquid" } },
-        { key = "chemical",    label = "Chemical", patterns = { "chemical" } },
-        { key = "gas",         label = "Gas",      patterns = { "gas" } },
-        { key = "infusion",    label = "Infusion", patterns = { "infusion" } },
-        { key = "pigment",     label = "Pigment",  patterns = { "pigment" } },
-        { key = "slurry",      label = "Slurry",   patterns = { "slurry" } },
-        { key = "item",        label = "Items",    patterns = { "storage disk", "item disk", "disk" } },
-    },
-
-    CATEGORY_ORDER = {
-        item = 1,
-        fluid = 2,
-        energy_disk = 3,
-        source = 4,
-        chemical = 5,
-        gas = 6,
-        infusion = 7,
-        pigment = 8,
-        slurry = 9,
-        other = 99,
-    },
-
-    ABBR = {
-        item = "ITD",
-        fluid = "FLD",
-        energy_disk = "ENG",
-        source = "SRC",
-        chemical = "CHM",
-        gas = "GAS",
-        infusion = "INF",
-        pigment = "PGM",
-        slurry = "SLR",
-        other = "OTH",
-    },
-
-    ALERTS = {
-        enabled = {
-            items = true,
-            fluids = true,
-            energy = true,
-
-            item = true,
-            fluid = true,
-            energy_disk = true,
-            source = true,
-            chemical = true,
-            gas = true,
-            infusion = true,
-            pigment = true,
-            slurry = true,
-            other = false,
-        },
-
-        thresholds = {
-            items       = { warn = 80, danger = 95, inverse = false },
-            fluids      = { warn = 80, danger = 95, inverse = false },
-            energy      = { warn = 20, danger = 5,  inverse = true  },
-
-            item        = { warn = 80, danger = 95, inverse = false },
-            fluid       = { warn = 80, danger = 95, inverse = false },
-            energy_disk = { warn = 20, danger = 5,  inverse = true  },
-            source      = { warn = 80, danger = 95, inverse = false },
-            chemical    = { warn = 80, danger = 95, inverse = false },
-            gas         = { warn = 80, danger = 95, inverse = false },
-            infusion    = { warn = 80, danger = 95, inverse = false },
-            pigment     = { warn = 80, danger = 95, inverse = false },
-            slurry      = { warn = 80, danger = 95, inverse = false },
-            other       = { warn = 90, danger = 98, inverse = false },
-
-            default     = { warn = 80, danger = 95, inverse = false },
-        }
-    }
-}
 
 -- =========================
 -- AUTO UPDATE
 -- =========================
-local function getCurrentFile()
-    if shell and shell.getRunningProgram then
-        local p = shell.getRunningProgram()
-        if p and p ~= "" then
-            return p
-        end
-    end
-    return "rs_storage.lua"
-end
-
-local function readFile(path)
-    if not fs.exists(path) then return nil end
-    local h = fs.open(path, "r")
-    if not h then return nil end
-    local c = h.readAll()
-    h.close()
-    return c
-end
-
-local function writeFile(path, content)
-    local h = fs.open(path, "w")
-    if not h then return false end
-    h.write(content or "")
-    h.close()
-    return true
-end
-
-local function fetchUrl(url, tmpPath)
-    if http and http.get then
-        local ok, response = pcall(http.get, url)
-        if ok and response then
-            local content = response.readAll()
-            response.close()
-            if content and content ~= "" then
-                return content
-            end
-        end
-    end
-
-    if shell and shell.run then
-        if fs.exists(tmpPath) then
-            fs.delete(tmpPath)
-        end
-
-        local ok = pcall(function()
-            shell.run("wget", url, tmpPath)
-        end)
-
-        if ok and fs.exists(tmpPath) then
-            local content = readFile(tmpPath)
-            fs.delete(tmpPath)
-            if content and content ~= "" then
-                return content
-            end
-        end
-    end
-
-    return nil
-end
+local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua"
+local AUTO_UPDATE_ENABLED = true
+local AUTO_UPDATE_FILE = "startup.lua"
+local AUTO_UPDATE_TMP = "startup.lua.tmp"
 
 local function autoUpdate()
-    if not CONFIG.AUTO_UPDATE_ENABLED then
+    if not AUTO_UPDATE_ENABLED then
         return
     end
 
-    local currentFile = getCurrentFile()
-    local tmpFile = currentFile .. ".tmp"
-
-    local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL, tmpFile)
-    if not remote then
-        print("Auto-update: impossible de verifier la version distante.")
+    if not http then
+        print("HTTP indisponible, auto-update ignore.")
         return
     end
 
-    local localContent = readFile(currentFile)
-    if localContent == remote then
-        print("Auto-update: aucune mise a jour.")
+    if fs.exists(AUTO_UPDATE_TMP) then
+        fs.delete(AUTO_UPDATE_TMP)
+    end
+
+    print("Verification mise a jour...")
+
+    local ok = pcall(function()
+        shell.run("wget", AUTO_UPDATE_URL, AUTO_UPDATE_TMP)
+    end)
+
+    if not ok or not fs.exists(AUTO_UPDATE_TMP) then
+        print("Echec du telechargement.")
         return
     end
 
-    if writeFile(tmpFile, remote) then
-        if fs.exists(currentFile) then
-            fs.delete(currentFile)
+    local h = fs.open(AUTO_UPDATE_TMP, "r")
+    local newContent = h and h.readAll() or nil
+    if h then h.close() end
+
+    if not newContent or newContent == "" then
+        print("Fichier telecharge vide.")
+        if fs.exists(AUTO_UPDATE_TMP) then
+            fs.delete(AUTO_UPDATE_TMP)
         end
-        fs.move(tmpFile, currentFile)
-        print("Auto-update: mise a jour appliquee, reboot...")
-        sleep(1)
-        os.reboot()
-    else
-        print("Auto-update: echec d'ecriture.")
+        return
     end
+
+    local oldContent = nil
+    if fs.exists(AUTO_UPDATE_FILE) then
+        local old = fs.open(AUTO_UPDATE_FILE, "r")
+        if old then
+            oldContent = old.readAll()
+            old.close()
+        end
+    end
+
+    if oldContent == newContent then
+        fs.delete(AUTO_UPDATE_TMP)
+        return
+    end
+
+    if fs.exists(AUTO_UPDATE_FILE) then
+        fs.delete(AUTO_UPDATE_FILE)
+    end
+
+    fs.move(AUTO_UPDATE_TMP, AUTO_UPDATE_FILE)
+    print("Mise a jour appliquee, redemarrage...")
+    sleep(1)
+    os.reboot()
 end
 
 autoUpdate()
 
 -- =========================
--- HELPERS
+-- CONFIG
 -- =========================
-local function clamp(value, minValue, maxValue)
-    if value < minValue then return minValue end
-    if value > maxValue then return maxValue end
-    return value
+local CONFIG = {
+    showGraph = false,
+    monitorScale = 0.5,
+    refreshInterval = 1,
+    historySize = 48,
+    title = "Refined Storage Dashboard v4",
+
+    itemsWarnPercent = 80,
+    itemsDangerPercent = 95,
+
+    fluidsWarnPercent = 80,
+    fluidsDangerPercent = 95,
+
+    energyWarnLowPercent = 20,
+    energyDangerLowPercent = 5,
+}
+
+-- =========================
+-- PERIPHERALS
+-- =========================
+local bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
+if not bridge then
+    error("rs_bridge / rsBridge non detecte")
 end
 
+local mon = peripheral.find("monitor")
+if not mon then
+    error("monitor non detecte")
+end
+
+mon.setTextScale(CONFIG.monitorScale)
+
+-- =========================
+-- STATE
+-- =========================
+local history = {
+    items = {},
+    fluids = {},
+    energy = {},
+}
+
+local lastFrame = {}
+local lastSizeX, lastSizeY = 0, 0
+
+local energyStats = {
+    lastStored = nil,
+    lastTime = nil,
+    deltaPerSec = 0,
+    avgInput = 0,
+}
+
+-- =========================
+-- UTILS
+-- =========================
 local function safe(fn, default)
     local ok, res = pcall(fn)
     if ok then return res end
     return default
 end
 
-local function nowSec()
-    return os.epoch("utc") / 1000
+local function size()
+    return mon.getSize()
 end
 
 local function trim(text, maxLen)
@@ -235,7 +159,11 @@ local function percent(used, total)
     used = tonumber(used) or 0
     total = tonumber(total) or 0
     if total <= 0 then return 0 end
-    return clamp(math.floor((used / total) * 100 + 0.5), 0, 100)
+
+    local p = math.floor((used / total) * 100 + 0.5)
+    if p < 0 then p = 0 end
+    if p > 100 then p = 100 end
+    return p
 end
 
 local function formatNumber(n)
@@ -266,15 +194,15 @@ local function formatRate(n)
     return sign .. formatNumber(n) .. "/s"
 end
 
-local function formatTime(seconds)
-    if not seconds or seconds < 0 or seconds == math.huge then
+local function formatDuration(seconds)
+    seconds = tonumber(seconds)
+
+    if not seconds or seconds == math.huge or seconds < 0 then
         return "--"
-    end
-    if seconds > 30 * 24 * 3600 then
-        return "long"
     end
 
     seconds = math.floor(seconds + 0.5)
+
     local d = math.floor(seconds / 86400)
     seconds = seconds % 86400
     local h = math.floor(seconds / 3600)
@@ -307,404 +235,158 @@ end
 
 local function pushHistory(tbl, value)
     tbl[#tbl + 1] = tonumber(value) or 0
-    while #tbl > 48 do
+    while #tbl > CONFIG.historySize do
         table.remove(tbl, 1)
     end
 end
 
-local function firstExisting(tbl, keys, default)
-    if type(tbl) ~= "table" then return default end
-    for _, k in ipairs(keys) do
-        if tbl[k] ~= nil then
-            return tbl[k]
-        end
-    end
-    return default
-end
-
-local function categoryOrderIndex(key)
-    return CONFIG.CATEGORY_ORDER[key] or 999
-end
-
-local function wrapText(text, width)
-    text = tostring(text or "")
+local function graphString(width, values)
     width = math.max(1, width)
 
-    local lines = {}
-    if text == "" then
-        return { "" }
+    local count = #values
+    if count == 0 then
+        return string.rep(".", width)
     end
 
-    while #text > width do
-        local cut = width
-        local space = text:sub(1, width):match("^.*() ")
-        if space and space > math.floor(width * 0.5) then
-            cut = space
+    local startIndex = math.max(1, count - width + 1)
+    local maxVal = 0
+
+    for i = startIndex, count do
+        if values[i] > maxVal then
+            maxVal = values[i]
         end
-
-        local line = text:sub(1, cut):gsub("%s+$", "")
-        lines[#lines + 1] = line
-        text = text:sub(cut + 1):gsub("^%s+", "")
     end
 
-    if text ~= "" then
-        lines[#lines + 1] = text
-    end
+    if maxVal <= 0 then maxVal = 1 end
 
-    return lines
-end
-
--- =========================
--- UI HELPERS
--- =========================
-local function fillLine(termObj, y, bg)
-    local w = termObj.getSize()
-    termObj.setCursorPos(1, y)
-    termObj.setBackgroundColor(bg or colors.black)
-    termObj.write(string.rep(" ", w))
-end
-
-local function writeAt(termObj, x, y, text, fg, bg, maxLen)
-    local w = termObj.getSize()
-    if y < 1 then return end
-    if x > w then return end
-
-    text = tostring(text or "")
-    if maxLen then
-        text = trim(text, maxLen)
-    end
-
-    if x < 1 then
-        text = text:sub(2 - x)
-        x = 1
-    end
-
-    if text == "" then return end
-
-    termObj.setCursorPos(x, y)
-    if bg then termObj.setBackgroundColor(bg) end
-    if fg then termObj.setTextColor(fg) end
-    termObj.write(trim(text, w - x + 1))
-end
-
-local function centerText(termObj, y, text, fg, bg)
-    local w = termObj.getSize()
-    text = trim(text, w)
-    local x = math.max(1, math.floor((w - #text) / 2) + 1)
-    writeAt(termObj, x, y, text, fg, bg)
-end
-
-local function drawButton(termObj, x, y, label, isActive)
-    local bg = isActive and colors.blue or colors.gray
-    local fg = colors.white
-    local text = " " .. label .. " "
-    writeAt(termObj, x, y, text, fg, bg)
-    return #text
-end
-
-local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
-    ratio = clamp(ratio or 0, 0, 1)
-    local filled = clamp(math.floor((w * ratio) + 0.5), 0, w)
-
-    termObj.setCursorPos(x, y)
-    termObj.setBackgroundColor(emptyColor)
-    termObj.write(string.rep(" ", w))
-
-    if filled > 0 then
-        termObj.setCursorPos(x, y)
-        termObj.setBackgroundColor(fillColor)
-        termObj.write(string.rep(" ", filled))
-    end
-
-    if label and #label > 0 then
-        local tx = x + math.max(0, math.floor((w - #label) / 2))
-        writeAt(termObj, tx, y, label, colors.white, nil)
-    end
-end
-
--- =========================
--- PERIPHERIQUES
--- =========================
-local bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
-if not bridge then
-    error("rs_bridge / rsBridge non detecte")
-end
-
-local mon = peripheral.find("monitor")
-if not mon then
-    error("monitor non detecte")
-end
-
-mon.setTextScale(CONFIG.TEXT_SCALE)
-local monitorName = peripheral.getName(mon)
-
--- =========================
--- ETAT
--- =========================
-local state = {
-    showAlertSummary = CONFIG.SHOW_ALERT_SUMMARY,
-    showCategorySummary = CONFIG.SHOW_CATEGORY_SUMMARY,
-}
-
-local cache = {
-    slowLastRefresh = 0,
-    itemTypes = 0,
-    fluidTypes = 0,
-    cells = {},
-    categories = {},
-}
-
-local history = {
-    items = {},
-    fluids = {},
-    energy = {},
-}
-
-local energyStats = {
-    lastStored = nil,
-    lastTime = nil,
-    deltaPerSec = 0,
-    avgInput = 0,
-}
-
-local backBuffer
-
--- =========================
--- ALERTS
--- =========================
-local function getAlertConfig(key)
-    return CONFIG.ALERTS.thresholds[key] or CONFIG.ALERTS.thresholds.default
-end
-
-local function isAlertEnabled(key)
-    local value = CONFIG.ALERTS.enabled[key]
-    if value == nil then return true end
-    return value
-end
-
-local function buildAlert(key, pct, context)
-    if pct == nil then
-        return { text = "N/A", color = colors.gray, severity = 0, enabled = false }
-    end
-
-    if not isAlertEnabled(key) then
-        return { text = "OFF", color = colors.gray, severity = 0, enabled = false }
-    end
-
-    local cfg = getAlertConfig(key)
-    local warn = cfg.warn or 80
-    local danger = cfg.danger or 95
-    local inverse = cfg.inverse == true
-
-    if inverse then
-        if pct <= danger then
-            if context and context.charging then
-                return { text = "LOW+", color = colors.orange, severity = 1, enabled = true }
-            end
-            return { text = "CRIT", color = colors.red, severity = 2, enabled = true }
-        elseif pct <= warn then
-            return { text = "LOW", color = colors.orange, severity = 1, enabled = true }
+    local chars = {}
+    for i = startIndex, count do
+        local ratio = values[i] / maxVal
+        if ratio >= 0.875 then
+            chars[#chars + 1] = "#"
+        elseif ratio >= 0.625 then
+            chars[#chars + 1] = "="
+        elseif ratio >= 0.375 then
+            chars[#chars + 1] = "-"
+        elseif ratio >= 0.125 then
+            chars[#chars + 1] = "."
         else
-            return { text = "OK", color = colors.lime, severity = 0, enabled = true }
+            chars[#chars + 1] = " "
+        end
+    end
+
+    while #chars < width do
+        table.insert(chars, 1, " ")
+    end
+
+    return table.concat(chars)
+end
+
+local function barString(width, used, total)
+    width = math.max(1, width)
+    used = tonumber(used) or 0
+    total = tonumber(total) or 0
+
+    local filled = 0
+    if total > 0 then
+        filled = math.floor((used / total) * width + 0.5)
+        if filled < 0 then filled = 0 end
+        if filled > width then filled = width end
+    end
+
+    return string.rep("#", filled) .. string.rep("-", width - filled)
+end
+
+local function getAlertLabel(name, p, warn, danger, inverse)
+    if inverse then
+        if p <= danger then
+            return { name .. ": CRIT", colors.red }
+        elseif p <= warn then
+            return { name .. ": LOW", colors.orange }
+        else
+            return { name .. ": OK", colors.lime }
         end
     else
-        if pct >= danger then
-            return { text = "CRIT", color = colors.red, severity = 2, enabled = true }
-        elseif pct >= warn then
-            return { text = "WARN", color = colors.orange, severity = 1, enabled = true }
+        if p >= danger then
+            return { name .. ": CRIT", colors.red }
+        elseif p >= warn then
+            return { name .. ": WARN", colors.orange }
         else
-            return { text = "OK", color = colors.lime, severity = 0, enabled = true }
+            return { name .. ": OK", colors.lime }
         end
     end
 end
 
 -- =========================
--- CELLS / CATEGORIES
+-- FRAME BUFFER
 -- =========================
-local function parseCapacityFromName(name, categoryKey)
-    local lower = string.lower(name or "")
+local function newFrame()
+    local w, h = size()
+    local frame = {}
 
-    if lower:find("infinite", 1, true) then
-        return 0
+    for y = 1, h do
+        frame[y] = {
+            text = string.rep(" ", w),
+            fg = colors.white,
+            bg = colors.black,
+        }
     end
 
-    if categoryKey == "item" then
-        local n, suffix = lower:match("(%d+)%s*([kmgte])")
-        if n and suffix then
-            local powers = { k = 1, m = 2, g = 3, t = 4, e = 5 }
-            return tonumber(n) * (1000 ^ (powers[suffix] or 0))
-        end
-    elseif categoryKey == "fluid" then
-        local n = lower:match("(%d+)%s*[b]")
-        if n then
-            return tonumber(n) * 1000
-        end
-    elseif categoryKey == "source" then
-        local n = lower:match("(%d+)%s*[b]")
-        if n then
-            return tonumber(n)
-        end
-    elseif categoryKey == "energy_disk" then
-        local n, suffix = lower:match("(%d+)%s*([kmgte])")
-        if n and suffix then
-            local powers = { k = 1, m = 2, g = 3, t = 4, e = 5 }
-            return tonumber(n) * (1000 ^ (powers[suffix] or 0))
-        end
-    end
-
-    return 0
+    return frame
 end
 
-local function detectCategoryKey(name, tagsText)
-    local blob = string.lower((name or "") .. " " .. (tagsText or ""))
+local function writeLine(frame, y, text, fg, bg)
+    local w, h = size()
+    if y < 1 or y > h then return end
 
-    for _, rule in ipairs(CONFIG.CATEGORY_RULES) do
-        for _, pattern in ipairs(rule.patterns) do
-            if blob:find(string.lower(pattern), 1, true) then
-                return rule.key, rule.label
-            end
-        end
+    text = trim(text or "", w)
+    if #text < w then
+        text = text .. string.rep(" ", w - #text)
     end
 
-    return "other", "Autres"
-end
-
-local function normalizeCell(cell)
-    local nested = firstExisting(cell, { "resource", "item", "cell", "stack", "resourceStack" }, nil)
-
-    local name = tostring(
-        firstExisting(cell, { "displayName", "display_name", "name", "id", "item" }, nil)
-        or firstExisting(nested, { "displayName", "display_name", "name", "id", "item" }, "Disque inconnu")
-    )
-
-    local tags = firstExisting(cell, { "tags" }, nil) or firstExisting(nested, { "tags" }, nil)
-    local tagsText = ""
-    if type(tags) == "table" then
-        tagsText = table.concat(tags, " ")
-    end
-
-    local categoryKey, categoryLabel = detectCategoryKey(name, tagsText)
-
-    local stored = toNumber(
-        firstExisting(cell, { "stored", "used", "amount", "value", "count" }, nil)
-        or firstExisting(nested, { "stored", "used", "amount", "value" }, 0),
-        0
-    )
-
-    local capacity = toNumber(
-        firstExisting(cell, { "capacity", "total", "max", "maxStorage", "size" }, nil)
-        or firstExisting(nested, { "capacity", "total", "max", "maxStorage", "size" }, 0),
-        0
-    )
-
-    if capacity <= 0 then
-        capacity = parseCapacityFromName(name, categoryKey)
-    end
-
-    return {
-        raw = cell,
-        name = name,
-        stored = stored,
-        capacity = capacity,
-        key = categoryKey,
-        label = categoryLabel,
+    frame[y] = {
+        text = text,
+        fg = fg or colors.white,
+        bg = bg or colors.black,
     }
 end
 
-local function getCellsData()
-    local rawCells = safe(function() return bridge.getCells() end, {}) or {}
-    local cells = {}
+local function renderFrame(frame)
+    local w, h = size()
 
-    if type(rawCells) ~= "table" then
-        return cells
+    if w ~= lastSizeX or h ~= lastSizeY then
+        mon.setBackgroundColor(colors.black)
+        mon.clear()
+        lastFrame = {}
+        lastSizeX, lastSizeY = w, h
     end
 
-    for _, cell in ipairs(rawCells) do
-        if type(cell) == "table" then
-            local c = normalizeCell(cell)
-            if CONFIG.SHOW_EMPTY_CATEGORIES or c.stored > 0 or c.capacity > 0 or c.name ~= "Disque inconnu" then
-                cells[#cells + 1] = c
-            end
+    for y = 1, h do
+        local old = lastFrame[y]
+        local new = frame[y]
+
+        local changed = (not old)
+            or old.text ~= new.text
+            or old.fg ~= new.fg
+            or old.bg ~= new.bg
+
+        if changed then
+            mon.setCursorPos(1, y)
+            mon.setTextColor(new.fg)
+            mon.setBackgroundColor(new.bg)
+            mon.write(new.text)
         end
     end
 
-    table.sort(cells, function(a, b)
-        local oa = categoryOrderIndex(a.key)
-        local ob = categoryOrderIndex(b.key)
-        if oa ~= ob then return oa < ob end
-        return a.name < b.name
-    end)
-
-    return cells
-end
-
-local function aggregateCategories(cells, charging)
-    local map = {}
-
-    for _, cell in ipairs(cells) do
-        local key = cell.key or "other"
-        if not map[key] then
-            map[key] = {
-                key = key,
-                label = cell.label or key,
-                used = 0,
-                total = 0,
-                count = 0,
-            }
-        end
-
-        map[key].used = map[key].used + (cell.stored or 0)
-        map[key].total = map[key].total + (cell.capacity or 0)
-        map[key].count = map[key].count + 1
-    end
-
-    local categories = {}
-    for _, cat in pairs(map) do
-        if cat.total > 0 then
-            cat.percent = percent(cat.used, cat.total)
-        else
-            cat.percent = nil
-        end
-
-        cat.alert = buildAlert(cat.key, cat.percent, { charging = charging })
-
-        if CONFIG.SHOW_EMPTY_CATEGORIES or cat.used > 0 or cat.total > 0 then
-            categories[#categories + 1] = cat
-        end
-    end
-
-    table.sort(categories, function(a, b)
-        local oa = categoryOrderIndex(a.key)
-        local ob = categoryOrderIndex(b.key)
-        if oa ~= ob then return oa < ob end
-        return a.label < b.label
-    end)
-
-    return categories
-end
-
-local function refreshSlowData(charging, force)
-    local now = nowSec()
-    if not force and (now - cache.slowLastRefresh) < CONFIG.SLOW_REFRESH_INTERVAL then
-        cache.categories = aggregateCategories(cache.cells, charging)
-        return
-    end
-
-    local items = safe(function() return bridge.getItems() end, {}) or {}
-    local fluids = safe(function() return bridge.getFluids() end, {}) or {}
-
-    cache.itemTypes = #items
-    cache.fluidTypes = #fluids
-    cache.cells = getCellsData()
-    cache.categories = aggregateCategories(cache.cells, charging)
-    cache.slowLastRefresh = now
+    mon.setBackgroundColor(colors.black)
+    lastFrame = frame
 end
 
 -- =========================
--- ENERGY
+-- DATA
 -- =========================
 local function updateEnergyStats(storedEnergy, avgInput)
-    local now = nowSec()
+    local now = os.epoch("utc") / 1000
 
     storedEnergy = tonumber(storedEnergy) or 0
     avgInput = tonumber(avgInput) or 0
@@ -714,7 +396,7 @@ local function updateEnergyStats(storedEnergy, avgInput)
         if dt > 0 then
             local delta = storedEnergy - energyStats.lastStored
             local instantDeltaPerSec = delta / dt
-            energyStats.deltaPerSec = (energyStats.deltaPerSec * (1 - CONFIG.ETA_SMOOTHING)) + (instantDeltaPerSec * CONFIG.ETA_SMOOTHING)
+            energyStats.deltaPerSec = (energyStats.deltaPerSec * 0.7) + (instantDeltaPerSec * 0.3)
         end
     end
 
@@ -723,10 +405,7 @@ local function updateEnergyStats(storedEnergy, avgInput)
     energyStats.avgInput = avgInput
 end
 
--- =========================
--- DATA
--- =========================
-local function buildData()
+local function getData()
     local usedItems = toNumber(safe(function() return bridge.getUsedItemStorage() end, 0), 0)
     local totalItems = toNumber(safe(function() return bridge.getTotalItemStorage() end, 0), 0)
 
@@ -743,65 +422,41 @@ local function buildData()
     local energyTotal = toNumber(safe(function() return bridge.getEnergyCapacity() end, 0), 0)
     local avgInput = toNumber(safe(function() return bridge.getAverageEnergyInput() end, 0), 0)
 
-    updateEnergyStats(storedEnergy, avgInput)
+    local items = safe(function() return bridge.getItems() end, {}) or {}
+    local fluids = safe(function() return bridge.getFluids() end, {}) or {}
 
-    local charging = energyStats.deltaPerSec > 1
-    refreshSlowData(charging, false)
+    local itemTypes = #items
+    local fluidTypes = #fluids
+
+    local online = safe(function() return bridge.isOnline() end, nil)
+    local connected = safe(function() return bridge.isConnected() end, nil)
+
+    updateEnergyStats(storedEnergy, avgInput)
 
     local pItems = percent(usedItems, totalItems)
     local pFluids = percent(usedFluids, totalFluids)
     local pEnergy = percent(storedEnergy, energyTotal)
 
-    local itemAlert = buildAlert("items", pItems, nil)
-    local fluidAlert = buildAlert("fluids", pFluids, nil)
-    local energyAlert = buildAlert("energy", pEnergy, { charging = charging })
-
-    local trend = "Stable"
-    local eta = "--"
-
-    if energyStats.deltaPerSec > 1 then
-        trend = "Charge"
-        local remaining = energyTotal - storedEnergy
-        if remaining > 0 then
-            eta = formatTime(remaining / energyStats.deltaPerSec)
-        end
-    elseif energyStats.deltaPerSec < -1 then
-        trend = "Decharge"
-        if storedEnergy > 0 then
-            eta = formatTime(storedEnergy / math.abs(energyStats.deltaPerSec))
-        end
-    end
-
-    local online = safe(function() return bridge.isOnline() end, nil)
-    local connected = safe(function() return bridge.isConnected() end, nil)
-
     return {
         items = {
             used = usedItems,
             total = totalItems,
-            types = cache.itemTypes,
+            types = itemTypes,
             percent = pItems,
-            alert = itemAlert,
         },
         fluids = {
             used = usedFluids,
             total = totalFluids,
-            types = cache.fluidTypes,
+            types = fluidTypes,
             percent = pFluids,
-            alert = fluidAlert,
         },
         energy = {
             stored = storedEnergy,
             total = energyTotal,
             percent = pEnergy,
-            avgInput = avgInput,
+            inputAvg = energyStats.avgInput,
             deltaPerSec = energyStats.deltaPerSec,
-            trend = trend,
-            eta = eta,
-            alert = energyAlert,
         },
-        categories = cache.categories,
-        diskCount = #cache.cells,
         network = {
             online = online,
             connected = connected,
@@ -810,336 +465,171 @@ local function buildData()
 end
 
 -- =========================
--- PALETTE
+-- BUILD FRAME
 -- =========================
-local function applyPalette()
-    if not CONFIG.USE_CUSTOM_PALETTE then
-        return
-    end
+local function buildMetric(frame, y, title, used, total, unit, graphData)
+    local w = size()
+    local p = percent(used, total)
+    local color = getPercentColor(p)
 
-    pcall(function()
-        mon.setPaletteColor(colors.black,      0x101218)
-        mon.setPaletteColor(colors.gray,       0x2B3240)
-        mon.setPaletteColor(colors.lightGray,  0x8E97A8)
-        mon.setPaletteColor(colors.white,      0xF2F4F8)
-        mon.setPaletteColor(colors.cyan,       0x38BDF8)
-        mon.setPaletteColor(colors.blue,       0x2563EB)
-        mon.setPaletteColor(colors.lightBlue,  0x60A5FA)
-        mon.setPaletteColor(colors.green,      0x16A34A)
-        mon.setPaletteColor(colors.lime,       0x84CC16)
-        mon.setPaletteColor(colors.yellow,     0xEAB308)
-        mon.setPaletteColor(colors.orange,     0xF97316)
-        mon.setPaletteColor(colors.red,        0xEF4444)
-    end)
-end
+    writeLine(frame, y, title, colors.cyan)
+    y = y + 1
 
--- =========================
--- BUFFER
--- =========================
-local function getBuffer()
-    local w, h = mon.getSize()
-
-    if not backBuffer then
-        backBuffer = window.create(mon, 1, 1, w, h, false)
-    else
-        local bw, bh = backBuffer.getSize()
-        if bw ~= w or bh ~= h then
-            backBuffer = window.create(mon, 1, 1, w, h, false)
-        end
-    end
-
-    backBuffer.setVisible(false)
-    backBuffer.setBackgroundColor(colors.black)
-    backBuffer.setTextColor(colors.white)
-    backBuffer.clear()
-    backBuffer.setCursorPos(1, 1)
-
-    return backBuffer, w, h
-end
-
--- =========================
--- DRAW
--- =========================
-local function drawHeader(termObj, data, w)
-    fillLine(termObj, 1, colors.gray)
-    fillLine(termObj, 2, colors.black)
-    fillLine(termObj, 3, colors.black)
-    fillLine(termObj, 4, colors.black)
-
-    local status = "ONLINE"
-    if data.network.online == false then
-        status = "OFFLINE"
-    elseif data.network.connected == false then
-        status = "DISCONNECT"
-    end
-
-    writeAt(termObj, 2, 1, trim(CONFIG.TITLE, math.max(1, w - #status - 4)), colors.white, colors.gray)
-    writeAt(termObj, math.max(2, w - #status - 1), 1, status, colors.cyan, colors.gray)
-
-    local meta = "Types I " .. tostring(data.items.types)
-        .. " | Types F " .. tostring(data.fluids.types)
-        .. " | Disques " .. tostring(data.diskCount)
-    centerText(termObj, 2, trim(meta, w - 4), colors.lightGray, colors.black)
-
-    local occ = math.max(data.items.percent or 0, data.fluids.percent or 0, data.energy.percent or 0)
-    drawProgressBar(termObj, 3, 3, math.max(10, w - 4), occ / 100, colors.green, colors.gray, "Occupation max " .. tostring(occ) .. "%")
-
-    local mainAlert = "ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
-    writeAt(termObj, 2, 4, trim(mainAlert, math.max(1, w - 18)), colors.lightBlue, colors.black)
-
-    local modeText = "ALR:" .. (state.showAlertSummary and "ON" or "OFF") .. " CAT:" .. (state.showCategorySummary and "ON" or "OFF")
-    writeAt(termObj, math.max(2, w - #modeText - 1), 4, modeText, colors.lightBlue, colors.black)
-end
-
-local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, x, y, w, unit)
-    fillLine(termObj, y, colors.gray)
-    fillLine(termObj, y + 1, colors.black)
-    fillLine(termObj, y + 2, colors.black)
-    fillLine(termObj, y + 3, colors.black)
-
-    local innerX = x + 1
-    local innerW = math.max(10, w - 2)
-
-    local headRight = tostring(pct) .. "% " .. (alert and alert.text or "N/A")
-    writeAt(termObj, innerX, y, title, colors.white, colors.gray, math.max(1, innerW - #headRight - 1))
-    writeAt(termObj, math.max(innerX, x + w - #headRight), y, headRight, alert and alert.color or colors.lightGray, colors.gray)
-
-    local main = formatNumber(used) .. " / " .. formatNumber(total)
+    local left = formatNumber(used) .. " / " .. formatNumber(total)
     if unit and unit ~= "" then
-        main = main .. " " .. unit
+        left = left .. " " .. unit
     end
-    writeAt(termObj, innerX, y + 1, trim(main, innerW), colors.white, colors.black)
-    drawProgressBar(termObj, innerX, y + 2, innerW, pct / 100, getPercentColor(pct), colors.gray, "")
-    writeAt(termObj, innerX, y + 3, trim(extra1 or "", innerW), colors.lightGray, colors.black)
+
+    local right = tostring(p) .. "%"
+    local middleWidth = math.max(1, w - #right - 1)
+
+    local line1 = trim(left, middleWidth)
+    if #line1 < middleWidth then
+        line1 = line1 .. string.rep(" ", middleWidth - #line1)
+    end
+    line1 = line1 .. right
+    writeLine(frame, y, line1, color)
+    y = y + 1
+
+    writeLine(frame, y, barString(w, used, total > 0 and total or 1), color)
+    y = y + 1
+
+    if CONFIG.showGraph then
+        writeLine(frame, y, "Historique:", colors.lightGray)
+        y = y + 1
+
+        local graph = graphString(w, graphData)
+        writeLine(frame, y, graph, colors.lightBlue)
+        y = y + 1
+    end
+
+    writeLine(frame, y, string.rep("-", w), colors.gray)
+    y = y + 1
+
+    return y
 end
 
-local function buildCategoryCountsLine(categories)
-    local parts = {}
-    for _, cat in ipairs(categories) do
-        local abbr = CONFIG.ABBR[cat.key] or string.upper(string.sub(cat.key, 1, 3))
-        parts[#parts + 1] = abbr .. "x" .. tostring(cat.count)
+local function buildEnergySection(frame, y, energy)
+    local w = size()
+    local p = energy.percent
+    local color = getPercentColor(p)
+
+    writeLine(frame, y, "Energie", colors.cyan)
+    y = y + 1
+
+    local left = formatNumber(energy.stored) .. " / " .. formatNumber(energy.total) .. " FE"
+    local right = tostring(p) .. "%"
+    local middleWidth = math.max(1, w - #right - 1)
+
+    local line1 = trim(left, middleWidth)
+    if #line1 < middleWidth then
+        line1 = line1 .. string.rep(" ", middleWidth - #line1)
     end
-    return "Cats: " .. table.concat(parts, " | ")
-end
+    line1 = line1 .. right
+    writeLine(frame, y, line1, color)
+    y = y + 1
 
-local function buildCategoryWarnLine(categories)
-    local parts = {}
-    local worst = 0
+    writeLine(frame, y, barString(w, energy.stored, energy.total > 0 and energy.total or 1), color)
+    y = y + 1
 
-    for _, cat in ipairs(categories) do
-        if cat.alert.enabled and (cat.alert.severity or 0) > 0 then
-            local abbr = CONFIG.ABBR[cat.key] or string.upper(string.sub(cat.key, 1, 3))
-            parts[#parts + 1] = abbr .. ":" .. cat.alert.text
-            if cat.alert.severity > worst then
-                worst = cat.alert.severity
-            end
+    local trend = "Stable"
+    local eta = "--"
+
+    if energy.deltaPerSec > 1 then
+        trend = "Charge"
+        local remaining = energy.total - energy.stored
+        if remaining > 0 then
+            eta = formatDuration(remaining / energy.deltaPerSec)
+        end
+    elseif energy.deltaPerSec < -1 then
+        trend = "Decharge"
+        if energy.stored > 0 then
+            eta = formatDuration(energy.stored / math.abs(energy.deltaPerSec))
         end
     end
 
-    if #parts == 0 then
-        return "Cat warn: aucune", colors.lime
-    end
+    writeLine(frame, y, "Net: " .. formatRate(energy.deltaPerSec) .. " | " .. trend, colors.lightBlue)
+    y = y + 1
 
-    local color = (worst >= 2) and colors.red or colors.orange
-    return "Cat warn: " .. table.concat(parts, " | "), color
+    writeLine(frame, y, "ETA: " .. eta, colors.lightGray)
+    y = y + 1
+
+    writeLine(frame, y, string.rep("-", w), colors.gray)
+    y = y + 1
+
+    return y
 end
 
-local function drawFooter(termObj, w, h)
-    if not CONFIG.SHOW_FOOTER or h < 8 then
-        return
-    end
-
-    fillLine(termObj, h - 1, colors.black)
-    fillLine(termObj, h, colors.black)
-
-    local left = 2
-    left = left + drawButton(termObj, left, h, "ALR", state.showAlertSummary) + 2
-    left = left + drawButton(termObj, left, h, "CAT", state.showCategorySummary) + 2
-    left = left + drawButton(termObj, left, h, "REF", false) + 2
-
-    writeAt(termObj, math.max(left, w - 9), h, "Synthese", colors.cyan, colors.black)
+local function buildAlertsLine(data)
+    return {
+        getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false),
+        getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false),
+        getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true),
+    }
 end
 
-local function drawScreen(data)
-    local termObj, w, h = getBuffer()
-    drawHeader(termObj, data, w)
+local function buildFrame(data)
+    local w, h = size()
+    local frame = newFrame()
 
-    local top = 5
-    local gutter = 2
-    local leftW = math.floor((w - gutter) / 2)
-    local rightW = w - leftW - gutter
-    local leftX = 1
-    local rightX = leftW + gutter + 1
-
-    drawMetricCard(termObj, "Items", data.items.used, data.items.total, data.items.percent, data.items.alert,
-        "Types: " .. tostring(data.items.types), leftX, top, leftW, "")
-
-    drawMetricCard(termObj, "Fluides", data.fluids.used, data.fluids.total, data.fluids.percent, data.fluids.alert,
-        "Types: " .. tostring(data.fluids.types), rightX, top, rightW, "mB")
-
-    local energyY = top + 5
-
-    fillLine(termObj, energyY, colors.gray)
-    fillLine(termObj, energyY + 1, colors.black)
-    fillLine(termObj, energyY + 2, colors.black)
-    fillLine(termObj, energyY + 3, colors.black)
-    fillLine(termObj, energyY + 4, colors.black)
-
-    local headRight = tostring(data.energy.percent) .. "% " .. data.energy.alert.text
-    writeAt(termObj, 2, energyY, "Energie", colors.white, colors.gray, math.max(1, w - #headRight - 4))
-    writeAt(termObj, math.max(2, w - #headRight), energyY, headRight, data.energy.alert.color, colors.gray)
-
-    writeAt(termObj, 2, energyY + 1,
-        trim(formatNumber(data.energy.stored) .. " / " .. formatNumber(data.energy.total) .. " FE", w - 2),
-        colors.white, colors.black)
-
-    drawProgressBar(termObj, 2, energyY + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
-    writeAt(termObj, 2, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
-    writeAt(termObj, 2, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
-
-    local currentY = energyY + 6
-    local maxBodyY = h - (CONFIG.SHOW_FOOTER and 2 or 0)
-
-    for y = currentY, maxBodyY do
-        fillLine(termObj, y, colors.black)
+    local statusText = "ONLINE"
+    if data.network.online == false then
+        statusText = "OFFLINE"
+    elseif data.network.connected == false then
+        statusText = "DISCONNECT"
     end
 
-    if state.showAlertSummary and currentY <= maxBodyY then
-        local severity = math.max(
-            data.items.alert.severity or 0,
-            data.fluids.alert.severity or 0,
-            data.energy.alert.severity or 0
-        )
+    local title = trim(CONFIG.title, math.max(1, w - #statusText - 1))
+    local top = title
+    if #top < (w - #statusText) then
+        top = top .. string.rep(" ", (w - #statusText) - #top)
+    end
+    top = trim(top .. statusText, w)
+
+    writeLine(frame, 1, top, colors.cyan)
+    writeLine(frame, 2, string.rep("-", w), colors.gray)
+
+    local y = 3
+    y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
+    y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
+    y = buildEnergySection(frame, y, data.energy)
+
+    if y <= h then
+        local alerts = buildAlertsLine(data)
+        local txt = alerts[1][1] .. " | " .. alerts[2][1] .. " | " .. alerts[3][1]
+
         local color = colors.lime
-        if severity >= 2 then
+        if alerts[1][2] == colors.red or alerts[2][2] == colors.red or alerts[3][2] == colors.red then
             color = colors.red
-        elseif severity >= 1 then
+        elseif alerts[1][2] == colors.orange or alerts[2][2] == colors.orange or alerts[3][2] == colors.orange then
             color = colors.orange
         end
 
-        local summary = "Synthese alertes: ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
-        for _, line in ipairs(wrapText(summary, w - 2)) do
-            if currentY > maxBodyY then break end
-            writeAt(termObj, 2, currentY, line, color, colors.black)
-            currentY = currentY + 1
-        end
+        writeLine(frame, y, txt, color)
+        y = y + 1
     end
 
-    if state.showCategorySummary and currentY <= maxBodyY then
-        for _, line in ipairs(wrapText(buildCategoryCountsLine(data.categories), w - 2)) do
-            if currentY > maxBodyY then break end
-            writeAt(termObj, 2, currentY, line, colors.lightGray, colors.black)
-            currentY = currentY + 1
-        end
-
-        if currentY <= maxBodyY then
-            local warnText, warnColor = buildCategoryWarnLine(data.categories)
-            for _, line in ipairs(wrapText(warnText, w - 2)) do
-                if currentY > maxBodyY then break end
-                writeAt(termObj, 2, currentY, line, warnColor, colors.black)
-                currentY = currentY + 1
-            end
-        end
+    if y <= h then
+        local footer = "Types items: " .. tostring(data.items.types)
+            .. " | Types fluides: " .. tostring(data.fluids.types)
+        writeLine(frame, y, footer, colors.lightGray)
     end
 
-    if currentY <= maxBodyY then
-        writeAt(termObj, 2, currentY, "Disques: " .. tostring(data.diskCount), colors.lightGray, colors.black)
-    end
-
-    drawFooter(termObj, w, h)
-    backBuffer.setVisible(true)
-end
-
--- =========================
--- PALETTE
--- =========================
-applyPalette()
-
--- =========================
--- INTERACTION
--- =========================
-local function handleTouch(x, y)
-    local _, h = mon.getSize()
-
-    if CONFIG.SHOW_FOOTER and y == h then
-        if x >= 2 and x <= 7 then
-            state.showAlertSummary = not state.showAlertSummary
-            return
-        elseif x >= 9 and x <= 14 then
-            state.showCategorySummary = not state.showCategorySummary
-            return
-        elseif x >= 16 and x <= 21 then
-            cache.slowLastRefresh = 0
-            return
-        end
-    end
-
-    cache.slowLastRefresh = 0
+    return frame
 end
 
 -- =========================
 -- LOOP
 -- =========================
-local function render()
-    bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge") or bridge
-    mon = peripheral.find("monitor") or mon
-
-    if not mon then
-        error("monitor non detecte")
-    end
-
-    mon.setTextScale(CONFIG.TEXT_SCALE)
-    monitorName = peripheral.getName(mon)
-    applyPalette()
-
-    if not bridge then
-        local termObj, w, h = getBuffer()
-        fillLine(termObj, 1, colors.gray)
-        writeAt(termObj, 2, 1, CONFIG.TITLE, colors.white, colors.gray)
-        centerText(termObj, math.floor(h / 2), "rs_bridge non detecte", colors.red, colors.black)
-        drawFooter(termObj, w, h)
-        backBuffer.setVisible(true)
-        return
-    end
-
-    local data = buildData()
+while true do
+    local data = getData()
 
     pushHistory(history.items, data.items.used)
     pushHistory(history.fluids, data.fluids.used)
     pushHistory(history.energy, data.energy.stored)
 
-    drawScreen(data)
-end
+    local frame = buildFrame(data)
+    renderFrame(frame)
 
-render()
-local timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
-
-while true do
-    local event, p1, p2, p3 = os.pullEvent()
-
-    if event == "timer" and p1 == timer then
-        render()
-        timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
-
-    elseif event == "monitor_touch" and p1 == monitorName then
-        handleTouch(p2, p3)
-        render()
-
-    elseif event == "monitor_resize" and p1 == monitorName then
-        mon.setTextScale(CONFIG.TEXT_SCALE)
-        applyPalette()
-        render()
-
-    elseif event == "peripheral" or event == "peripheral_detach" then
-        bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
-        mon = peripheral.find("monitor") or mon
-
-        if mon then
-            monitorName = peripheral.getName(mon)
-            mon.setTextScale(CONFIG.TEXT_SCALE)
-            applyPalette()
-        end
-
-        render()
-    end
+    sleep(CONFIG.refreshInterval)
 end
