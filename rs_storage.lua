@@ -1,73 +1,145 @@
 -- =========================================================
--- Refined Storage Dashboard V4
--- Anti-flicker / Auto-update / Alerts / ETA / Trend
+-- Refined Storage Dashboard - Monitoring Simple
+-- 1 ligne Items / 1 ligne Fluides / 1 ligne Energie
+-- CC:Tweaked + rs_bridge
 -- =========================================================
+
+-- =========================
+-- CONFIG
+-- =========================
+local CONFIG = {
+    AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua",
+    AUTO_UPDATE_ENABLED = true,
+
+    TITLE = "Refined Storage - Monitoring",
+    TEXT_SCALE = 0.5,
+    REFRESH_INTERVAL = 1.0,
+    SLOW_REFRESH_INTERVAL = 10,
+    ETA_SMOOTHING = 0.35,
+    USE_CUSTOM_PALETTE = true,
+    SHOW_FOOTER = true,
+
+    ITEMS_WARN_PERCENT = 80,
+    ITEMS_DANGER_PERCENT = 95,
+
+    FLUIDS_WARN_PERCENT = 80,
+    FLUIDS_DANGER_PERCENT = 95,
+
+    ENERGY_WARN_LOW_PERCENT = 20,
+    ENERGY_DANGER_LOW_PERCENT = 5,
+}
 
 -- =========================
 -- AUTO UPDATE
 -- =========================
-local AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua"
-local AUTO_UPDATE_ENABLED = true
-local AUTO_UPDATE_FILE = "startup.lua"
-local AUTO_UPDATE_TMP = "startup.lua.tmp"
+local function getCurrentFile()
+    if shell and shell.getRunningProgram then
+        local p = shell.getRunningProgram()
+        if p and p ~= "" then
+            return p
+        end
+    end
+    return "startup"
+end
+
+local function readFile(path)
+    if not fs.exists(path) then return nil end
+    local h = fs.open(path, "r")
+    if not h then return nil end
+    local c = h.readAll()
+    h.close()
+    return c
+end
+
+local function writeFile(path, content)
+    local h = fs.open(path, "w")
+    if not h then return false end
+    h.write(content or "")
+    h.close()
+    return true
+end
+
+local function fetchUrl(url, tmpPath)
+    if http and http.get then
+        local ok, response = pcall(http.get, url)
+        if ok and response then
+            local content = response.readAll()
+            response.close()
+            if content and content ~= "" then
+                return content
+            end
+        end
+    end
+
+    if shell and shell.run then
+        if fs.exists(tmpPath) then
+            fs.delete(tmpPath)
+        end
+
+        local ok = pcall(function()
+            shell.run("wget", url, tmpPath)
+        end)
+
+        if ok and fs.exists(tmpPath) then
+            local content = readFile(tmpPath)
+            fs.delete(tmpPath)
+            if content and content ~= "" then
+                return content
+            end
+        end
+    end
+
+    return nil
+end
 
 local function autoUpdate()
-    if not AUTO_UPDATE_ENABLED then
+    if not CONFIG.AUTO_UPDATE_ENABLED then
         return
     end
 
-    if not http then
-        print("HTTP indisponible, auto-update ignore.")
+    local currentFile = getCurrentFile()
+    local tmpFile = currentFile .. ".tmp"
+    local backupFile = currentFile .. ".bak"
+
+    local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL, tmpFile)
+    if not remote then
+        print("Auto-update: impossible de verifier la version distante.")
         return
     end
 
-    if fs.exists(AUTO_UPDATE_TMP) then
-        fs.delete(AUTO_UPDATE_TMP)
-    end
-
-    print("Verification mise a jour...")
-
-    local ok = pcall(function()
-        shell.run("wget", AUTO_UPDATE_URL, AUTO_UPDATE_TMP)
-    end)
-
-    if not ok or not fs.exists(AUTO_UPDATE_TMP) then
-        print("Echec du telechargement.")
+    local localContent = readFile(currentFile)
+    if localContent == remote then
+        print("Auto-update: aucune mise a jour.")
         return
     end
 
-    local h = fs.open(AUTO_UPDATE_TMP, "r")
-    local newContent = h and h.readAll() or nil
-    if h then h.close() end
-
-    if not newContent or newContent == "" then
-        print("Fichier telecharge vide.")
-        if fs.exists(AUTO_UPDATE_TMP) then
-            fs.delete(AUTO_UPDATE_TMP)
-        end
+    local ok, err = load(remote)
+    if not ok then
+        print("Auto-update: script distant invalide.")
+        print(err)
         return
     end
 
-    local oldContent = nil
-    if fs.exists(AUTO_UPDATE_FILE) then
-        local old = fs.open(AUTO_UPDATE_FILE, "r")
-        if old then
-            oldContent = old.readAll()
-            old.close()
-        end
+    if fs.exists(tmpFile) then
+        fs.delete(tmpFile)
     end
 
-    if oldContent == newContent then
-        fs.delete(AUTO_UPDATE_TMP)
+    if not writeFile(tmpFile, remote) then
+        print("Auto-update: echec d'ecriture tmp.")
         return
     end
 
-    if fs.exists(AUTO_UPDATE_FILE) then
-        fs.delete(AUTO_UPDATE_FILE)
+    if fs.exists(backupFile) then
+        fs.delete(backupFile)
     end
 
-    fs.move(AUTO_UPDATE_TMP, AUTO_UPDATE_FILE)
-    print("Mise a jour appliquee, redemarrage...")
+    if fs.exists(currentFile) then
+        fs.copy(currentFile, backupFile)
+        fs.delete(currentFile)
+    end
+
+    fs.move(tmpFile, currentFile)
+    print("Auto-update: mise a jour appliquee, reboot...")
     sleep(1)
     os.reboot()
 end
@@ -75,70 +147,22 @@ end
 autoUpdate()
 
 -- =========================
--- CONFIG
+-- HELPERS
 -- =========================
-local CONFIG = {
-    showGraph = false,
-    monitorScale = 0.5,
-    refreshInterval = 1,
-    historySize = 48,
-    title = "Refined Storage Dashboard v4",
-
-    itemsWarnPercent = 80,
-    itemsDangerPercent = 95,
-
-    fluidsWarnPercent = 80,
-    fluidsDangerPercent = 95,
-
-    energyWarnLowPercent = 20,
-    energyDangerLowPercent = 5,
-}
-
--- =========================
--- PERIPHERALS
--- =========================
-local bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
-if not bridge then
-    error("rs_bridge / rsBridge non detecte")
+local function clamp(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
 end
 
-local mon = peripheral.find("monitor")
-if not mon then
-    error("monitor non detecte")
-end
-
-mon.setTextScale(CONFIG.monitorScale)
-
--- =========================
--- STATE
--- =========================
-local history = {
-    items = {},
-    fluids = {},
-    energy = {},
-}
-
-local lastFrame = {}
-local lastSizeX, lastSizeY = 0, 0
-
-local energyStats = {
-    lastStored = nil,
-    lastTime = nil,
-    deltaPerSec = 0,
-    avgInput = 0,
-}
-
--- =========================
--- UTILS
--- =========================
 local function safe(fn, default)
     local ok, res = pcall(fn)
     if ok then return res end
     return default
 end
 
-local function size()
-    return mon.getSize()
+local function nowSec()
+    return os.epoch("utc") / 1000
 end
 
 local function trim(text, maxLen)
@@ -159,11 +183,7 @@ local function percent(used, total)
     used = tonumber(used) or 0
     total = tonumber(total) or 0
     if total <= 0 then return 0 end
-
-    local p = math.floor((used / total) * 100 + 0.5)
-    if p < 0 then p = 0 end
-    if p > 100 then p = 100 end
-    return p
+    return clamp(math.floor((used / total) * 100 + 0.5), 0, 100)
 end
 
 local function formatNumber(n)
@@ -194,15 +214,16 @@ local function formatRate(n)
     return sign .. formatNumber(n) .. "/s"
 end
 
-local function formatDuration(seconds)
-    seconds = tonumber(seconds)
-
-    if not seconds or seconds == math.huge or seconds < 0 then
+local function formatTime(seconds)
+    if not seconds or seconds < 0 or seconds == math.huge then
         return "--"
     end
 
-    seconds = math.floor(seconds + 0.5)
+    if seconds > 30 * 24 * 3600 then
+        return "long"
+    end
 
+    seconds = math.floor(seconds + 0.5)
     local d = math.floor(seconds / 86400)
     seconds = seconds % 86400
     local h = math.floor(seconds / 3600)
@@ -233,160 +254,137 @@ local function getPercentColor(p)
     end
 end
 
-local function pushHistory(tbl, value)
-    tbl[#tbl + 1] = tonumber(value) or 0
-    while #tbl > CONFIG.historySize do
-        table.remove(tbl, 1)
+-- =========================
+-- UI HELPERS
+-- =========================
+local function fillLine(termObj, y, bg)
+    local w = termObj.getSize()
+    termObj.setCursorPos(1, y)
+    termObj.setBackgroundColor(bg or colors.black)
+    termObj.write(string.rep(" ", w))
+end
+
+local function writeAt(termObj, x, y, text, fg, bg, maxLen)
+    local w = termObj.getSize()
+    if y < 1 then return end
+    if x > w then return end
+
+    text = tostring(text or "")
+    if maxLen then
+        text = trim(text, maxLen)
+    end
+
+    if x < 1 then
+        text = text:sub(2 - x)
+        x = 1
+    end
+
+    if text == "" then return end
+
+    termObj.setCursorPos(x, y)
+    if bg then termObj.setBackgroundColor(bg) end
+    if fg then termObj.setTextColor(fg) end
+    termObj.write(trim(text, w - x + 1))
+end
+
+local function centerText(termObj, y, text, fg, bg)
+    local w = termObj.getSize()
+    text = trim(text, w)
+    local x = math.max(1, math.floor((w - #text) / 2) + 1)
+    writeAt(termObj, x, y, text, fg, bg)
+end
+
+local function drawButton(termObj, x, y, label, isActive)
+    local bg = isActive and colors.blue or colors.gray
+    local fg = colors.white
+    local text = " " .. label .. " "
+    writeAt(termObj, x, y, text, fg, bg)
+    return #text
+end
+
+local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
+    ratio = clamp(ratio or 0, 0, 1)
+    local filled = clamp(math.floor((w * ratio) + 0.5), 0, w)
+
+    termObj.setCursorPos(x, y)
+    termObj.setBackgroundColor(emptyColor)
+    termObj.write(string.rep(" ", w))
+
+    if filled > 0 then
+        termObj.setCursorPos(x, y)
+        termObj.setBackgroundColor(fillColor)
+        termObj.write(string.rep(" ", filled))
+    end
+
+    if label and #label > 0 then
+        local tx = x + math.max(0, math.floor((w - #label) / 2))
+        writeAt(termObj, tx, y, label, colors.white, nil)
     end
 end
 
-local function graphString(width, values)
-    width = math.max(1, width)
-
-    local count = #values
-    if count == 0 then
-        return string.rep(".", width)
-    end
-
-    local startIndex = math.max(1, count - width + 1)
-    local maxVal = 0
-
-    for i = startIndex, count do
-        if values[i] > maxVal then
-            maxVal = values[i]
-        end
-    end
-
-    if maxVal <= 0 then maxVal = 1 end
-
-    local chars = {}
-    for i = startIndex, count do
-        local ratio = values[i] / maxVal
-        if ratio >= 0.875 then
-            chars[#chars + 1] = "#"
-        elseif ratio >= 0.625 then
-            chars[#chars + 1] = "="
-        elseif ratio >= 0.375 then
-            chars[#chars + 1] = "-"
-        elseif ratio >= 0.125 then
-            chars[#chars + 1] = "."
-        else
-            chars[#chars + 1] = " "
-        end
-    end
-
-    while #chars < width do
-        table.insert(chars, 1, " ")
-    end
-
-    return table.concat(chars)
+-- =========================
+-- PERIPHERALS
+-- =========================
+local bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
+if not bridge then
+    error("rs_bridge / rsBridge non detecte")
 end
 
-local function barString(width, used, total)
-    width = math.max(1, width)
-    used = tonumber(used) or 0
-    total = tonumber(total) or 0
-
-    local filled = 0
-    if total > 0 then
-        filled = math.floor((used / total) * width + 0.5)
-        if filled < 0 then filled = 0 end
-        if filled > width then filled = width end
-    end
-
-    return string.rep("#", filled) .. string.rep("-", width - filled)
+local mon = peripheral.find("monitor")
+if not mon then
+    error("monitor non detecte")
 end
 
-local function getAlertLabel(name, p, warn, danger, inverse)
+mon.setTextScale(CONFIG.TEXT_SCALE)
+local monitorName = peripheral.getName(mon)
+
+-- =========================
+-- STATE
+-- =========================
+local cache = {
+    slowLastRefresh = 0,
+    itemTypes = 0,
+    fluidTypes = 0,
+    cellCount = 0,
+}
+
+local energyStats = {
+    lastStored = nil,
+    lastTime = nil,
+    deltaPerSec = 0,
+    avgInput = 0,
+}
+
+local backBuffer
+
+-- =========================
+-- EXTRACTION
+-- =========================
+local function buildMainAlert(name, p, warn, danger, inverse, charging)
     if inverse then
         if p <= danger then
-            return { name .. ": CRIT", colors.red }
+            if charging then
+                return { text = name .. " LOW+", color = colors.orange, severity = 1 }
+            end
+            return { text = name .. " CRIT", color = colors.red, severity = 2 }
         elseif p <= warn then
-            return { name .. ": LOW", colors.orange }
+            return { text = name .. " LOW", color = colors.orange, severity = 1 }
         else
-            return { name .. ": OK", colors.lime }
+            return { text = name .. " OK", color = colors.lime, severity = 0 }
         end
     else
         if p >= danger then
-            return { name .. ": CRIT", colors.red }
+            return { text = name .. " CRIT", color = colors.red, severity = 2 }
         elseif p >= warn then
-            return { name .. ": WARN", colors.orange }
+            return { text = name .. " WARN", color = colors.orange, severity = 1 }
         else
-            return { name .. ": OK", colors.lime }
+            return { text = name .. " OK", color = colors.lime, severity = 0 }
         end
     end
 end
 
--- =========================
--- FRAME BUFFER
--- =========================
-local function newFrame()
-    local w, h = size()
-    local frame = {}
-
-    for y = 1, h do
-        frame[y] = {
-            text = string.rep(" ", w),
-            fg = colors.white,
-            bg = colors.black,
-        }
-    end
-
-    return frame
-end
-
-local function writeLine(frame, y, text, fg, bg)
-    local w, h = size()
-    if y < 1 or y > h then return end
-
-    text = trim(text or "", w)
-    if #text < w then
-        text = text .. string.rep(" ", w - #text)
-    end
-
-    frame[y] = {
-        text = text,
-        fg = fg or colors.white,
-        bg = bg or colors.black,
-    }
-end
-
-local function renderFrame(frame)
-    local w, h = size()
-
-    if w ~= lastSizeX or h ~= lastSizeY then
-        mon.setBackgroundColor(colors.black)
-        mon.clear()
-        lastFrame = {}
-        lastSizeX, lastSizeY = w, h
-    end
-
-    for y = 1, h do
-        local old = lastFrame[y]
-        local new = frame[y]
-
-        local changed = (not old)
-            or old.text ~= new.text
-            or old.fg ~= new.fg
-            or old.bg ~= new.bg
-
-        if changed then
-            mon.setCursorPos(1, y)
-            mon.setTextColor(new.fg)
-            mon.setBackgroundColor(new.bg)
-            mon.write(new.text)
-        end
-    end
-
-    mon.setBackgroundColor(colors.black)
-    lastFrame = frame
-end
-
--- =========================
--- DATA
--- =========================
 local function updateEnergyStats(storedEnergy, avgInput)
-    local now = os.epoch("utc") / 1000
+    local now = nowSec()
 
     storedEnergy = tonumber(storedEnergy) or 0
     avgInput = tonumber(avgInput) or 0
@@ -396,7 +394,7 @@ local function updateEnergyStats(storedEnergy, avgInput)
         if dt > 0 then
             local delta = storedEnergy - energyStats.lastStored
             local instantDeltaPerSec = delta / dt
-            energyStats.deltaPerSec = (energyStats.deltaPerSec * 0.7) + (instantDeltaPerSec * 0.3)
+            energyStats.deltaPerSec = (energyStats.deltaPerSec * (1 - CONFIG.ETA_SMOOTHING)) + (instantDeltaPerSec * CONFIG.ETA_SMOOTHING)
         end
     end
 
@@ -405,28 +403,35 @@ local function updateEnergyStats(storedEnergy, avgInput)
     energyStats.avgInput = avgInput
 end
 
-local function getData()
+local function refreshSlowData(force)
+    local now = nowSec()
+    if not force and (now - cache.slowLastRefresh) < CONFIG.SLOW_REFRESH_INTERVAL then
+        return
+    end
+
+    local items = safe(function() return bridge.getItems() end, {}) or {}
+    local fluids = safe(function() return bridge.getFluids() end, {}) or {}
+    local cells = safe(function() return bridge.getCells() end, {}) or {}
+
+    cache.itemTypes = #items
+    cache.fluidTypes = #fluids
+    cache.cellCount = #cells
+    cache.slowLastRefresh = now
+end
+
+local function buildData()
+    refreshSlowData(false)
+
     local usedItems = toNumber(safe(function() return bridge.getUsedItemStorage() end, 0), 0)
     local totalItems = toNumber(safe(function() return bridge.getTotalItemStorage() end, 0), 0)
 
     local usedFluids = toNumber(safe(function() return bridge.getUsedFluidStorage() end, 0), 0)
     local totalFluids = toNumber(safe(function() return bridge.getTotalFluidStorage() end, 0), 0)
 
-    local storedEnergy = toNumber(
-        safe(function() return bridge.getStoredEnergy() end,
-            safe(function() return bridge.getEnergyUsage() end, 0)
-        ),
-        0
-    )
-
+    local storedEnergy = toNumber(safe(function() return bridge.getStoredEnergy() end, 0), 0)
     local energyTotal = toNumber(safe(function() return bridge.getEnergyCapacity() end, 0), 0)
+    local energyUsage = toNumber(safe(function() return bridge.getEnergyUsage() end, 0), 0)
     local avgInput = toNumber(safe(function() return bridge.getAverageEnergyInput() end, 0), 0)
-
-    local items = safe(function() return bridge.getItems() end, {}) or {}
-    local fluids = safe(function() return bridge.getFluids() end, {}) or {}
-
-    local itemTypes = #items
-    local fluidTypes = #fluids
 
     local online = safe(function() return bridge.isOnline() end, nil)
     local connected = safe(function() return bridge.isConnected() end, nil)
@@ -437,25 +442,56 @@ local function getData()
     local pFluids = percent(usedFluids, totalFluids)
     local pEnergy = percent(storedEnergy, energyTotal)
 
+    local charging = energyStats.deltaPerSec > 1
+
+    local itemAlert = buildMainAlert("ITM", pItems, CONFIG.ITEMS_WARN_PERCENT, CONFIG.ITEMS_DANGER_PERCENT, false, false)
+    local fluidAlert = buildMainAlert("FLD", pFluids, CONFIG.FLUIDS_WARN_PERCENT, CONFIG.FLUIDS_DANGER_PERCENT, false, false)
+    local energyAlert = buildMainAlert("NRG", pEnergy, CONFIG.ENERGY_WARN_LOW_PERCENT, CONFIG.ENERGY_DANGER_LOW_PERCENT, true, charging)
+
+    local trend = "Stable"
+    local eta = "--"
+
+    if energyStats.deltaPerSec > 1 then
+        trend = "Charge"
+        local remaining = energyTotal - storedEnergy
+        if remaining > 0 then
+            eta = formatTime(remaining / energyStats.deltaPerSec)
+        end
+    elseif energyStats.deltaPerSec < -1 then
+        trend = "Decharge"
+        if storedEnergy > 0 then
+            eta = formatTime(storedEnergy / math.abs(energyStats.deltaPerSec))
+        end
+    end
+
     return {
         items = {
             used = usedItems,
             total = totalItems,
-            types = itemTypes,
             percent = pItems,
+            types = cache.itemTypes,
+            alert = itemAlert,
         },
         fluids = {
             used = usedFluids,
             total = totalFluids,
-            types = fluidTypes,
             percent = pFluids,
+            types = cache.fluidTypes,
+            alert = fluidAlert,
         },
         energy = {
             stored = storedEnergy,
             total = energyTotal,
             percent = pEnergy,
-            inputAvg = energyStats.avgInput,
+            usage = energyUsage,
+            avgInput = avgInput,
             deltaPerSec = energyStats.deltaPerSec,
+            trend = trend,
+            eta = eta,
+            alert = energyAlert,
+        },
+        cells = {
+            count = cache.cellCount,
         },
         network = {
             online = online,
@@ -465,171 +501,253 @@ local function getData()
 end
 
 -- =========================
--- BUILD FRAME
+-- PALETTE
 -- =========================
-local function buildMetric(frame, y, title, used, total, unit, graphData)
-    local w = size()
-    local p = percent(used, total)
-    local color = getPercentColor(p)
-
-    writeLine(frame, y, title, colors.cyan)
-    y = y + 1
-
-    local left = formatNumber(used) .. " / " .. formatNumber(total)
-    if unit and unit ~= "" then
-        left = left .. " " .. unit
+local function applyPalette()
+    if not CONFIG.USE_CUSTOM_PALETTE then
+        return
     end
 
-    local right = tostring(p) .. "%"
-    local middleWidth = math.max(1, w - #right - 1)
-
-    local line1 = trim(left, middleWidth)
-    if #line1 < middleWidth then
-        line1 = line1 .. string.rep(" ", middleWidth - #line1)
-    end
-    line1 = line1 .. right
-    writeLine(frame, y, line1, color)
-    y = y + 1
-
-    writeLine(frame, y, barString(w, used, total > 0 and total or 1), color)
-    y = y + 1
-
-    if CONFIG.showGraph then
-        writeLine(frame, y, "Historique:", colors.lightGray)
-        y = y + 1
-
-        local graph = graphString(w, graphData)
-        writeLine(frame, y, graph, colors.lightBlue)
-        y = y + 1
-    end
-
-    writeLine(frame, y, string.rep("-", w), colors.gray)
-    y = y + 1
-
-    return y
+    pcall(function()
+        mon.setPaletteColor(colors.black,      0x101218)
+        mon.setPaletteColor(colors.gray,       0x2B3240)
+        mon.setPaletteColor(colors.lightGray,  0x8E97A8)
+        mon.setPaletteColor(colors.white,      0xF2F4F8)
+        mon.setPaletteColor(colors.cyan,       0x38BDF8)
+        mon.setPaletteColor(colors.blue,       0x2563EB)
+        mon.setPaletteColor(colors.lightBlue,  0x60A5FA)
+        mon.setPaletteColor(colors.green,      0x16A34A)
+        mon.setPaletteColor(colors.lime,       0x84CC16)
+        mon.setPaletteColor(colors.yellow,     0xEAB308)
+        mon.setPaletteColor(colors.orange,     0xF97316)
+        mon.setPaletteColor(colors.red,        0xEF4444)
+    end)
 end
 
-local function buildEnergySection(frame, y, energy)
-    local w = size()
-    local p = energy.percent
-    local color = getPercentColor(p)
+-- =========================
+-- BUFFER
+-- =========================
+local function getBuffer()
+    local w, h = mon.getSize()
 
-    writeLine(frame, y, "Energie", colors.cyan)
-    y = y + 1
-
-    local left = formatNumber(energy.stored) .. " / " .. formatNumber(energy.total) .. " FE"
-    local right = tostring(p) .. "%"
-    local middleWidth = math.max(1, w - #right - 1)
-
-    local line1 = trim(left, middleWidth)
-    if #line1 < middleWidth then
-        line1 = line1 .. string.rep(" ", middleWidth - #line1)
-    end
-    line1 = line1 .. right
-    writeLine(frame, y, line1, color)
-    y = y + 1
-
-    writeLine(frame, y, barString(w, energy.stored, energy.total > 0 and energy.total or 1), color)
-    y = y + 1
-
-    local trend = "Stable"
-    local eta = "--"
-
-    if energy.deltaPerSec > 1 then
-        trend = "Charge"
-        local remaining = energy.total - energy.stored
-        if remaining > 0 then
-            eta = formatDuration(remaining / energy.deltaPerSec)
-        end
-    elseif energy.deltaPerSec < -1 then
-        trend = "Decharge"
-        if energy.stored > 0 then
-            eta = formatDuration(energy.stored / math.abs(energy.deltaPerSec))
+    if not backBuffer then
+        backBuffer = window.create(mon, 1, 1, w, h, false)
+    else
+        local bw, bh = backBuffer.getSize()
+        if bw ~= w or bh ~= h then
+            backBuffer = window.create(mon, 1, 1, w, h, false)
         end
     end
 
-    writeLine(frame, y, "Net: " .. formatRate(energy.deltaPerSec) .. " | " .. trend, colors.lightBlue)
-    y = y + 1
+    backBuffer.setVisible(false)
+    backBuffer.setBackgroundColor(colors.black)
+    backBuffer.setTextColor(colors.white)
+    backBuffer.clear()
+    backBuffer.setCursorPos(1, 1)
 
-    writeLine(frame, y, "ETA: " .. eta, colors.lightGray)
-    y = y + 1
-
-    writeLine(frame, y, string.rep("-", w), colors.gray)
-    y = y + 1
-
-    return y
+    return backBuffer, w, h
 end
 
-local function buildAlertsLine(data)
-    return {
-        getAlertLabel("ITM", data.items.percent, CONFIG.itemsWarnPercent, CONFIG.itemsDangerPercent, false),
-        getAlertLabel("FLD", data.fluids.percent, CONFIG.fluidsWarnPercent, CONFIG.fluidsDangerPercent, false),
-        getAlertLabel("NRG", data.energy.percent, CONFIG.energyWarnLowPercent, CONFIG.energyDangerLowPercent, true),
-    }
-end
+-- =========================
+-- DRAW
+-- =========================
+local function drawHeader(termObj, data, w)
+    fillLine(termObj, 1, colors.gray)
+    fillLine(termObj, 2, colors.black)
+    fillLine(termObj, 3, colors.black)
 
-local function buildFrame(data)
-    local w, h = size()
-    local frame = newFrame()
-
-    local statusText = "ONLINE"
+    local status = "ONLINE"
     if data.network.online == false then
-        statusText = "OFFLINE"
+        status = "OFFLINE"
     elseif data.network.connected == false then
-        statusText = "DISCONNECT"
+        status = "DISCONNECT"
     end
 
-    local title = trim(CONFIG.title, math.max(1, w - #statusText - 1))
-    local top = title
-    if #top < (w - #statusText) then
-        top = top .. string.rep(" ", (w - #statusText) - #top)
+    writeAt(termObj, 2, 1, trim(CONFIG.TITLE, math.max(1, w - #status - 4)), colors.white, colors.gray)
+    writeAt(termObj, math.max(2, w - #status - 1), 1, status, colors.cyan, colors.gray)
+
+    local meta = "Types I " .. tostring(data.items.types)
+        .. " | Types F " .. tostring(data.fluids.types)
+        .. " | Disques " .. tostring(data.cells.count)
+    centerText(termObj, 2, trim(meta, w - 4), colors.lightGray, colors.black)
+
+    local occ = math.max(data.items.percent, data.fluids.percent, data.energy.percent)
+    drawProgressBar(termObj, 3, 3, math.max(10, w - 4), occ / 100, colors.green, colors.gray, "Occupation max " .. tostring(occ) .. "%")
+end
+
+local function drawLineMetric(termObj, y, title, valueText, pct, alert, extra)
+    local w = termObj.getSize()
+
+    fillLine(termObj, y, colors.gray)
+    fillLine(termObj, y + 1, colors.black)
+    fillLine(termObj, y + 2, colors.black)
+
+    local right = tostring(pct) .. "% " .. alert.text
+    writeAt(termObj, 2, y, title, colors.white, colors.gray, math.max(1, w - #right - 4))
+    writeAt(termObj, math.max(2, w - #right - 1), y, right, alert.color, colors.gray)
+
+    writeAt(termObj, 2, y + 1, trim(valueText, w - 2), colors.white, colors.black)
+    drawProgressBar(termObj, 2, y + 2, w - 2, pct / 100, getPercentColor(pct), colors.gray, "")
+
+    if extra then
+        writeAt(termObj, 2, y + 1, trim(valueText, w - 2), colors.white, colors.black)
+        writeAt(termObj, 2, y + 2, trim(extra, w - 2), colors.lightGray, colors.black)
     end
-    top = trim(top .. statusText, w)
+end
 
-    writeLine(frame, 1, top, colors.cyan)
-    writeLine(frame, 2, string.rep("-", w), colors.gray)
+local function drawFooter(termObj, w, h)
+    if not CONFIG.SHOW_FOOTER then
+        return
+    end
 
-    local y = 3
-    y = buildMetric(frame, y, "Items", data.items.used, data.items.total, "", history.items)
-    y = buildMetric(frame, y, "Fluides", data.fluids.used, data.fluids.total, "mB", history.fluids)
-    y = buildEnergySection(frame, y, data.energy)
+    fillLine(termObj, h, colors.black)
+    local left = 2
+    left = left + drawButton(termObj, left, h, "REF", false) + 2
+    writeAt(termObj, math.max(left, w - 9), h, "Monitoring", colors.cyan, colors.black)
+end
 
-    if y <= h then
-        local alerts = buildAlertsLine(data)
-        local txt = alerts[1][1] .. " | " .. alerts[2][1] .. " | " .. alerts[3][1]
+local function drawScreen(data)
+    local termObj, w, h = getBuffer()
 
+    drawHeader(termObj, data, w)
+
+    local y1 = 5
+    local y2 = 9
+    local y3 = 13
+
+    fillLine(termObj, y1, colors.gray)
+    fillLine(termObj, y1 + 1, colors.black)
+    fillLine(termObj, y1 + 2, colors.black)
+    writeAt(termObj, 2, y1, "Items", colors.white, colors.gray)
+    writeAt(termObj, math.max(2, w - #(tostring(data.items.percent) .. "% " .. data.items.alert.text) - 1), y1,
+        tostring(data.items.percent) .. "% " .. data.items.alert.text, data.items.alert.color, colors.gray)
+    writeAt(termObj, 2, y1 + 1,
+        trim(formatNumber(data.items.used) .. " / " .. formatNumber(data.items.total) .. " | Types: " .. tostring(data.items.types), w - 2),
+        colors.white, colors.black)
+    drawProgressBar(termObj, 2, y1 + 2, w - 2, data.items.percent / 100, getPercentColor(data.items.percent), colors.gray, "")
+
+    fillLine(termObj, y2, colors.gray)
+    fillLine(termObj, y2 + 1, colors.black)
+    fillLine(termObj, y2 + 2, colors.black)
+    writeAt(termObj, 2, y2, "Fluides", colors.white, colors.gray)
+    writeAt(termObj, math.max(2, w - #(tostring(data.fluids.percent) .. "% " .. data.fluids.alert.text) - 1), y2,
+        tostring(data.fluids.percent) .. "% " .. data.fluids.alert.text, data.fluids.alert.color, colors.gray)
+    writeAt(termObj, 2, y2 + 1,
+        trim(formatNumber(data.fluids.used) .. " / " .. formatNumber(data.fluids.total) .. " mB | Types: " .. tostring(data.fluids.types), w - 2),
+        colors.white, colors.black)
+    drawProgressBar(termObj, 2, y2 + 2, w - 2, data.fluids.percent / 100, getPercentColor(data.fluids.percent), colors.gray, "")
+
+    fillLine(termObj, y3, colors.gray)
+    fillLine(termObj, y3 + 1, colors.black)
+    fillLine(termObj, y3 + 2, colors.black)
+    writeAt(termObj, 2, y3, "Energie", colors.white, colors.gray)
+    writeAt(termObj, math.max(2, w - #(tostring(data.energy.percent) .. "% " .. data.energy.alert.text) - 1), y3,
+        tostring(data.energy.percent) .. "% " .. data.energy.alert.text, data.energy.alert.color, colors.gray)
+    writeAt(termObj, 2, y3 + 1,
+        trim(formatNumber(data.energy.stored) .. " / " .. formatNumber(data.energy.total) .. " FE", w - 2),
+        colors.white, colors.black)
+    drawProgressBar(termObj, 2, y3 + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
+
+    local infoY = 17
+    local maxY = h - (CONFIG.SHOW_FOOTER and 1 or 0)
+    for y = infoY, maxY do
+        fillLine(termObj, y, colors.black)
+    end
+
+    if infoY <= maxY then
+        writeAt(termObj, 2, infoY, trim("Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend .. " | ETA: " .. data.energy.eta, w - 2), colors.lightBlue, colors.black)
+    end
+
+    if infoY + 1 <= maxY then
+        local sev = math.max(data.items.alert.severity, data.fluids.alert.severity, data.energy.alert.severity)
         local color = colors.lime
-        if alerts[1][2] == colors.red or alerts[2][2] == colors.red or alerts[3][2] == colors.red then
+        if sev >= 2 then
             color = colors.red
-        elseif alerts[1][2] == colors.orange or alerts[2][2] == colors.orange or alerts[3][2] == colors.orange then
+        elseif sev >= 1 then
             color = colors.orange
         end
-
-        writeLine(frame, y, txt, color)
-        y = y + 1
+        writeAt(termObj, 2, infoY + 1,
+            trim("Alertes: " .. data.items.alert.text .. " | " .. data.fluids.alert.text .. " | " .. data.energy.alert.text, w - 2),
+            color, colors.black)
     end
 
-    if y <= h then
-        local footer = "Types items: " .. tostring(data.items.types)
-            .. " | Types fluides: " .. tostring(data.fluids.types)
-        writeLine(frame, y, footer, colors.lightGray)
-    end
+    drawFooter(termObj, w, h)
+    backBuffer.setVisible(true)
+end
 
-    return frame
+-- =========================
+-- PALETTE
+-- =========================
+applyPalette()
+
+-- =========================
+-- INTERACTION
+-- =========================
+local function handleTouch(x, y)
+    local _, h = mon.getSize()
+    if CONFIG.SHOW_FOOTER and y == h then
+        cache.slowLastRefresh = 0
+    end
 end
 
 -- =========================
 -- LOOP
 -- =========================
+local function render()
+    bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge") or bridge
+    mon = peripheral.find("monitor") or mon
+
+    if not mon then
+        error("monitor non detecte")
+    end
+
+    mon.setTextScale(CONFIG.TEXT_SCALE)
+    monitorName = peripheral.getName(mon)
+    applyPalette()
+
+    if not bridge then
+        local termObj, w, h = getBuffer()
+        fillLine(termObj, 1, colors.gray)
+        writeAt(termObj, 2, 1, CONFIG.TITLE, colors.white, colors.gray)
+        centerText(termObj, math.floor(h / 2), "rs_bridge non detecte", colors.red, colors.black)
+        drawFooter(termObj, w, h)
+        backBuffer.setVisible(true)
+        return
+    end
+
+    local data = buildData()
+    drawScreen(data)
+end
+
+render()
+local timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
+
 while true do
-    local data = getData()
+    local event, p1, p2, p3 = os.pullEvent()
 
-    pushHistory(history.items, data.items.used)
-    pushHistory(history.fluids, data.fluids.used)
-    pushHistory(history.energy, data.energy.stored)
+    if event == "timer" and p1 == timer then
+        render()
+        timer = os.startTimer(CONFIG.REFRESH_INTERVAL)
 
-    local frame = buildFrame(data)
-    renderFrame(frame)
+    elseif event == "monitor_touch" and p1 == monitorName then
+        handleTouch(p2, p3)
+        render()
 
-    sleep(CONFIG.refreshInterval)
+    elseif event == "monitor_resize" and p1 == monitorName then
+        mon.setTextScale(CONFIG.TEXT_SCALE)
+        applyPalette()
+        render()
+
+    elseif event == "peripheral" or event == "peripheral_detach" then
+        bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge")
+        mon = peripheral.find("monitor") or mon
+
+        if mon then
+            monitorName = peripheral.getName(mon)
+            mon.setTextScale(CONFIG.TEXT_SCALE)
+            applyPalette()
+        end
+
+        render()
+    end
 end
