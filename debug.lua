@@ -13,11 +13,11 @@ local CONFIG = {
     AUTO_UPDATE_ENABLED = true,
     AUTO_UPDATE_FILE = "startup.lua",
     AUTO_UPDATE_TMP = "startup.lua.tmp",
-    MONITOR_NAME = nil,        -- nil = auto-detect
-    BRIDGE_NAME = nil,         -- nil = auto-detect
+    MONITOR_NAME = nil,
+    BRIDGE_NAME = nil,
     TEXT_SCALE = 0.5,
     REFRESH_INTERVAL = 2,
-    PAGE_ROTATE_EVERY = 6,     -- secondes
+    PAGE_ROTATE_EVERY = 6,
     TITLE = "Refined Storage - Bridge Infos",
     FOOTER = "CC:Tweaked + rsBridge",
     USE_COLOR = true
@@ -293,24 +293,26 @@ end
 -- =========================
 -- DATA COLLECTION
 -- =========================
-local function collectMethodList(bridge)
+local function collectMethodList(bridgeName, bridge)
     local methods = {}
 
-    local ok, result = safeCall(peripheral.getMethods, peripheral.getName(bridge))
-    if ok and type(result) == "table" then
-        for _, m in ipairs(result) do
-            table.insert(methods, m)
+    if bridgeName then
+        local ok, result = safeCall(peripheral.getMethods, bridgeName)
+        if ok and type(result) == "table" then
+            for _, m in ipairs(result) do
+                table.insert(methods, m)
+            end
+            table.sort(methods)
+            return methods
         end
-        table.sort(methods)
-        return methods
     end
 
-    -- fallback si jamais peripheral.getMethods ne marche pas
     for k, v in pairs(bridge) do
         if type(v) == "function" then
             table.insert(methods, k)
         end
     end
+
     table.sort(methods)
     return methods
 end
@@ -345,7 +347,7 @@ local function summarizeTable(t)
     return s
 end
 
-local function collectData(bridge)
+local function collectData(bridge, bridgeName)
     local data = {
         timestamp = os.date("%H:%M:%S"),
         general = {},
@@ -358,7 +360,7 @@ local function collectData(bridge)
     }
 
     -- Liste des méthodes dispo
-    data.methods = collectMethodList(bridge)
+    data.methods = collectMethodList(bridgeName, bridge)
 
     -- =========================
     -- GENERAL
@@ -403,7 +405,7 @@ local function collectData(bridge)
     data.items.method = method6
     if ok6 and type(result6) == "table" then
         data.items.list = result6
-        data.items.count = #result6
+        data.items.count = tableCount(result6)
 
         local totalAmount = 0
         for _, item in ipairs(result6) do
@@ -434,7 +436,7 @@ local function collectData(bridge)
     data.fluids.method = method7
     if ok7 and type(result7) == "table" then
         data.fluids.list = result7
-        data.fluids.count = #result7
+        data.fluids.count = tableCount(result7)
 
         local totalFluid = 0
         for _, fluid in ipairs(result7) do
@@ -471,7 +473,7 @@ local function collectData(bridge)
     data.crafting.tasksMethod = method9
     if ok9 and type(result9) == "table" then
         data.crafting.tasks = result9
-        data.crafting.taskCount = #result9
+        data.crafting.taskCount = tableCount(result9)
 
         for i = 1, math.min(5, #result9) do
             table.insert(data.rawSamples, {
@@ -731,7 +733,7 @@ local lastRotate = os.clock()
 
 while true do
     local ok, dataOrErr = pcall(function()
-        return collectData(bridge)
+        return collectData(bridge, bridgeName)
     end)
 
     if ok then
