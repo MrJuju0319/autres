@@ -248,9 +248,14 @@ local function initMonitor()
         if peripheral.isPresent(CONFIG.MONITOR_NAME) then
             mon = peripheral.wrap(CONFIG.MONITOR_NAME)
             monName = CONFIG.MONITOR_NAME
+        else
+            error("Moniteur force introuvable: " .. tostring(CONFIG.MONITOR_NAME))
         end
     else
-        monName, mon = findPeripheralByType({ "monitor" })
+        mon = peripheral.find("monitor")
+        if mon then
+            monName = peripheral.getName(mon)
+        end
     end
 
     if not mon then
@@ -272,19 +277,19 @@ local function initBridge()
             bridge = peripheral.wrap(CONFIG.BRIDGE_NAME)
             bridgeName = CONFIG.BRIDGE_NAME
             bridgeType = peripheral.getType(CONFIG.BRIDGE_NAME)
+        else
+            error("Bridge force introuvable: " .. tostring(CONFIG.BRIDGE_NAME))
         end
     else
-        -- Plusieurs noms possibles selon versions/mods
-        bridgeName, bridge, bridgeType = findPeripheralByType({
-            "rsBridge",
-            "meBridge",
-            "refinedstorage:bridge",
-            "ae2:bridge"
-        })
+        bridge = peripheral.find("rs_bridge")
+        if bridge then
+            bridgeName = peripheral.getName(bridge)
+            bridgeType = peripheral.getType(bridgeName)
+        end
     end
 
     if not bridge then
-        error("Aucun bridge rsBridge detecte.")
+        error("Aucun bridge rs_bridge detecte.")
     end
 
     return bridgeName, bridge, bridgeType
