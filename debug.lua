@@ -396,6 +396,12 @@ local energyStats = {
     avgInput = 0,
 }
 
+local history = {
+    items = {},
+    fluids = {},
+    energy = {},
+}
+
 local backBuffer
 
 -- =========================
