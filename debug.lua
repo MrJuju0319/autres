@@ -105,6 +105,7 @@ local function autoUpdate()
 
     local currentFile = getCurrentFile()
     local tmpFile = currentFile .. ".tmp"
+    local backupFile = currentFile .. ".bak"
 
     local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL, tmpFile)
     if not remote then
@@ -118,17 +119,35 @@ local function autoUpdate()
         return
     end
 
-    if writeFile(tmpFile, remote) then
-        if fs.exists(currentFile) then
-            fs.delete(currentFile)
-        end
-        fs.move(tmpFile, currentFile)
-        print("Auto-update: mise a jour appliquee, reboot...")
-        sleep(1)
-        os.reboot()
-    else
-        print("Auto-update: echec d'ecriture.")
+    local ok, err = load(remote)
+    if not ok then
+        print("Auto-update: script distant invalide.")
+        print(err)
+        return
     end
+
+    if fs.exists(tmpFile) then
+        fs.delete(tmpFile)
+    end
+
+    if not writeFile(tmpFile, remote) then
+        print("Auto-update: echec d'ecriture tmp.")
+        return
+    end
+
+    if fs.exists(backupFile) then
+        fs.delete(backupFile)
+    end
+
+    if fs.exists(currentFile) then
+        fs.copy(currentFile, backupFile)
+        fs.delete(currentFile)
+    end
+
+    fs.move(tmpFile, currentFile)
+    print("Auto-update: mise a jour appliquee, reboot...")
+    sleep(1)
+    os.reboot()
 end
 
 autoUpdate()
@@ -557,11 +576,14 @@ local function getTopTasks()
     local list = {}
 
     for _, t in ipairs(cache.tasks) do
+        local status, color = getTaskStatus(t)
+
         list[#list + 1] = {
             name = getTaskName(t),
             total = getTaskTotal(t),
             completion = getTaskCompletion(t),
-            status, color = getTaskStatus(t),
+            status = status,
+            color = color,
         }
     end
 
@@ -787,8 +809,7 @@ local function drawEnergyCard(termObj, data, x, y, w)
 
     drawProgressBar(termObj, x + 1, y + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
     writeAt(termObj, x + 1, y + 3, trim("Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, w - 2), colors.lightBlue, colors.black)
-    writeAt(termObj, x + 1, y + 4, trim("ETA: " .. data.energy.eta .. " | Usage: " .. formatRate(data.energy.usage), w - 2), colors.lightGray, colors.black)
-end
+    writeAt(termObj, x + 1, y + 4, trim("ETA: " .. data.energy.eta .. " | Usage: " .. formatNumber(data.energy.usage), w - 2), colors.lightGray, colors.black)end
 
 local function drawCraftCard(termObj, data, x, y, w)
     fillRect(termObj, x, y, w, 1, colors.gray)
