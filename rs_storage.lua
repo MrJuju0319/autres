@@ -253,6 +253,36 @@ local backBuffer
 -- OUTILS
 -- =========================
 
+local function writeAt(termObj, x, y, text, fg, bg, maxLen)
+    local w = termObj.getSize()
+    if y < 1 then return end
+    if x > w then return end
+
+    text = tostring(text or "")
+    if maxLen then
+        text = trim(text, maxLen)
+    end
+
+    if x < 1 then
+        text = text:sub(2 - x)
+        x = 1
+    end
+
+    if text == "" then return end
+
+    termObj.setCursorPos(x, y)
+    if bg then termObj.setBackgroundColor(bg) end
+    if fg then termObj.setTextColor(fg) end
+    termObj.write(trim(text, w - x + 1))
+end
+
+local function centerText(termObj, y, text, fg, bg)
+    local w = termObj.getSize()
+    text = trim(text, w)
+    local x = math.max(1, math.floor((w - #text) / 2) + 1)
+    writeAt(termObj, x, y, text, fg, bg)
+end
+
 local function fillLine(termObj, y, bg)
     local w = termObj.getSize()
     termObj.setCursorPos(1, y)
