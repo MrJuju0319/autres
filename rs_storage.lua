@@ -275,7 +275,7 @@ local function writeAt(termObj, x, y, text, fg, bg, maxLen)
     if fg then termObj.setTextColor(fg) end
     termObj.write(trim(text, w - x + 1))
 end
-
+ 
 local function centerText(termObj, y, text, fg, bg)
     local w = termObj.getSize()
     text = trim(text, w)
