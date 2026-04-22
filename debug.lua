@@ -9,9 +9,6 @@
 -- CONFIG
 -- =========================
 local CONFIG = {
-
-}
-local CONFIG = {
     AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/debug.lua",
     AUTO_UPDATE_ENABLED = true,
     AUTO_UPDATE_FILE = "startup.lua",
