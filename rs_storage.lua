@@ -1,7 +1,6 @@
 -- =========================================================
--- Refined Storage Storage Dashboard v6
--- Style inspire de l'Autocraft Monitor v2
--- Une seule page / synthese / anti-scintillement
+-- Refined Storage Storage Dashboard v7
+-- Une seule page / layout propre / anti-scintillement
 -- CC:Tweaked + rs_bridge
 -- =========================================================
 
@@ -14,10 +13,8 @@ local CONFIG = {
     AUTO_UPDATE_FILE = "startup.lua",
     AUTO_UPDATE_TMP = "startup.lua.tmp",
 
-    TITLE = "Refined Storage - Storage v6",
+    TITLE = "Refined Storage - Storage v7",
     TEXT_SCALE = 0.5,
-    SIDE_PADDING = 2,
-    HEADER_HEIGHT = 4,
     REFRESH_INTERVAL = 0.75,
     SLOW_REFRESH_INTERVAL = 10,
     ETA_SMOOTHING = 0.35,
@@ -26,7 +23,6 @@ local CONFIG = {
 
     SHOW_ALERT_SUMMARY = true,
     SHOW_CATEGORY_SUMMARY = true,
-    SHOW_GRAPH = false,
     SHOW_EMPTY_CATEGORIES = false,
 
     CATEGORY_RULES = {
@@ -124,28 +120,19 @@ local function getCurrentFile()
 end
 
 local function readFile(path)
-    if not fs.exists(path) then
-        return nil
-    end
-
-    local handle = fs.open(path, "r")
-    if not handle then
-        return nil
-    end
-
-    local content = handle.readAll()
-    handle.close()
-    return content
+    if not fs.exists(path) then return nil end
+    local h = fs.open(path, "r")
+    if not h then return nil end
+    local c = h.readAll()
+    h.close()
+    return c
 end
 
 local function writeFile(path, content)
-    local handle = fs.open(path, "w")
-    if not handle then
-        return false
-    end
-
-    handle.write(content or "")
-    handle.close()
+    local h = fs.open(path, "w")
+    if not h then return false end
+    h.write(content or "")
+    h.close()
     return true
 end
 
@@ -204,7 +191,6 @@ local function autoUpdate()
         if fs.exists(currentFile) then
             fs.delete(currentFile)
         end
-
         fs.move(CONFIG.AUTO_UPDATE_TMP, currentFile)
         print("Auto-update: mise a jour appliquee, reboot...")
         sleep(1)
@@ -236,8 +222,6 @@ local monitorName = peripheral.getName(mon)
 -- ETAT
 -- =========================
 local state = {
-    frame = 1,
-    lastError = nil,
     showAlertSummary = CONFIG.SHOW_ALERT_SUMMARY,
     showCategorySummary = CONFIG.SHOW_CATEGORY_SUMMARY,
 }
@@ -274,51 +258,6 @@ local function clamp(value, minValue, maxValue)
     return value
 end
 
-local function trim(text, maxLen)
-    text = tostring(text or "")
-    if maxLen <= 0 then return "" end
-    if #text <= maxLen then return text end
-    if maxLen <= 3 then return text:sub(1, maxLen) end
-    return text:sub(1, maxLen - 3) .. "..."
-end
-
-local function fillLine(termObj, y, bg)
-    local w = termObj.getSize()
-    termObj.setCursorPos(1, y)
-    termObj.setBackgroundColor(bg)
-    termObj.write(string.rep(" ", w))
-end
-
-local function writeAt(termObj, x, y, text, fg, bg, maxLen)
-    local w = termObj.getSize()
-    if y < 1 then return end
-    if x > w then return end
-
-    text = tostring(text or "")
-    if maxLen then
-        text = trim(text, maxLen)
-    end
-
-    if x < 1 then
-        text = text:sub(2 - x)
-        x = 1
-    end
-
-    if text == "" then return end
-
-    termObj.setCursorPos(x, y)
-    if bg then termObj.setBackgroundColor(bg) end
-    if fg then termObj.setTextColor(fg) end
-    termObj.write(trim(text, w - x + 1))
-end
-
-local function centerText(termObj, y, text, fg, bg)
-    local w = termObj.getSize()
-    text = trim(text, w)
-    local x = math.max(1, math.floor((w - #text) / 2) + 1)
-    writeAt(termObj, x, y, text, fg, bg)
-end
-
 local function safe(fn, default)
     local ok, res = pcall(fn)
     if ok then return res end
@@ -327,6 +266,14 @@ end
 
 local function nowSec()
     return os.epoch("utc") / 1000
+end
+
+local function trim(text, maxLen)
+    text = tostring(text or "")
+    if maxLen <= 0 then return "" end
+    if #text <= maxLen then return text end
+    if maxLen <= 3 then return text:sub(1, maxLen) end
+    return text:sub(1, maxLen - 3) .. "..."
 end
 
 local function toNumber(v, default)
@@ -339,11 +286,8 @@ local function percent(used, total)
     used = tonumber(used) or 0
     total = tonumber(total) or 0
     if total <= 0 then return 0 end
-
     local p = math.floor((used / total) * 100 + 0.5)
-    if p < 0 then p = 0 end
-    if p > 100 then p = 100 end
-    return p
+    return clamp(p, 0, 100)
 end
 
 local function formatNumber(n)
@@ -377,7 +321,6 @@ local function formatTime(seconds)
     end
 
     seconds = math.floor(seconds + 0.5)
-
     local d = math.floor(seconds / 86400)
     seconds = seconds % 86400
     local h = math.floor(seconds / 3600)
@@ -410,48 +353,6 @@ local function pushHistory(tbl, value)
     end
 end
 
-local function graphString(width, values)
-    width = math.max(1, width)
-
-    local count = #values
-    if count == 0 then
-        return string.rep(".", width)
-    end
-
-    local startIndex = math.max(1, count - width + 1)
-    local maxVal = 0
-
-    for i = startIndex, count do
-        if values[i] > maxVal then
-            maxVal = values[i]
-        end
-    end
-
-    if maxVal <= 0 then maxVal = 1 end
-
-    local chars = {}
-    for i = startIndex, count do
-        local ratio = values[i] / maxVal
-        if ratio >= 0.875 then
-            chars[#chars + 1] = "#"
-        elseif ratio >= 0.625 then
-            chars[#chars + 1] = "="
-        elseif ratio >= 0.375 then
-            chars[#chars + 1] = "-"
-        elseif ratio >= 0.125 then
-            chars[#chars + 1] = "."
-        else
-            chars[#chars + 1] = " "
-        end
-    end
-
-    while #chars < width do
-        table.insert(chars, 1, " ")
-    end
-
-    return table.concat(chars)
-end
-
 local function getPercentColor(p)
     if p >= 95 then
         return colors.red
@@ -470,9 +371,7 @@ end
 
 local function isAlertEnabled(key)
     local value = CONFIG.ALERTS.enabled[key]
-    if value == nil then
-        return true
-    end
+    if value == nil then return true end
     return value
 end
 
@@ -575,9 +474,7 @@ local function detectCategoryKey(name, tagsText)
 end
 
 local function normalizeCell(cell)
-    local nested = firstExisting(cell, {
-        "resource", "item", "cell", "stack", "resourceStack"
-    }, nil)
+    local nested = firstExisting(cell, { "resource", "item", "cell", "stack", "resourceStack" }, nil)
 
     local name = tostring(
         firstExisting(cell, { "displayName", "display_name", "name", "id", "item" }, nil)
@@ -865,7 +762,6 @@ end
 
 local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
     ratio = clamp(ratio or 0, 0, 1)
-
     local filled = math.floor((w * ratio) + 0.5)
     filled = clamp(filled, 0, w)
 
@@ -943,13 +839,10 @@ end
 
 local function buildCategoryCountsLine(categories, maxWidth)
     local parts = {}
-
     for _, cat in ipairs(categories) do
         local abbr = CONFIG.ABBR[cat.key] or string.upper(string.sub(cat.key, 1, 3))
-        local part = abbr .. "x" .. tostring(cat.count)
-        parts[#parts + 1] = part
+        parts[#parts + 1] = abbr .. "x" .. tostring(cat.count)
     end
-
     return trim("Cats: " .. table.concat(parts, " | "), maxWidth)
 end
 
@@ -990,6 +883,35 @@ local function drawFooter(termObj, w, h)
 
     local info = "Synthese"
     writeAt(termObj, math.max(left, w - #info - 1), h, info, colors.cyan, colors.black)
+end
+
+local function wrapText(text, width)
+    text = tostring(text or "")
+    width = math.max(1, width)
+
+    local lines = {}
+    if text == "" then
+        return { "" }
+    end
+
+    while #text > width do
+        local cut = width
+        local space = text:sub(1, width):match("^.*() ")
+        if space and space > math.floor(width * 0.5) then
+            cut = space
+        end
+
+        local line = text:sub(1, cut)
+        line = line:gsub("%s+$", "")
+        lines[#lines + 1] = line
+        text = text:sub(cut + 1):gsub("^%s+", "")
+    end
+
+    if text ~= "" then
+        lines[#lines + 1] = text
+    end
+
+    return lines
 end
 
 local function drawScreen(data)
@@ -1059,17 +981,16 @@ local function drawScreen(data)
     writeAt(termObj, innerX, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
     writeAt(termObj, innerX, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
 
-    local y = energyY + 6
     local maxBodyY = h - (CONFIG.SHOW_FOOTER and 2 or 0)
+    local summaryStartY = energyY + 6
 
-    while y <= maxBodyY do
+    for y = summaryStartY, maxBodyY do
         fillLine(termObj, y, colors.black)
-        y = y + 1
     end
 
-    y = energyY + 6
+    local currentY = summaryStartY
 
-    if state.showAlertSummary and y <= maxBodyY then
+    if state.showAlertSummary and currentY <= maxBodyY then
         local summary = "Synthese alertes: ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
         local severity = math.max(
             data.items.alert.severity or 0,
@@ -1084,22 +1005,36 @@ local function drawScreen(data)
             color = colors.orange
         end
 
-        writeAt(termObj, 2, y, trim(summary, w - 2), color, colors.black)
-        y = y + 1
+        local lines = wrapText(summary, w - 2)
+        for _, line in ipairs(lines) do
+            if currentY > maxBodyY then break end
+            writeAt(termObj, 2, currentY, line, color, colors.black)
+            currentY = currentY + 1
+        end
     end
 
-    if state.showCategorySummary and y <= maxBodyY then
-        writeAt(termObj, 2, y, buildCategoryCountsLine(data.categories, w - 2), colors.lightGray, colors.black)
-        y = y + 1
+    if state.showCategorySummary and currentY <= maxBodyY then
+        local countLines = wrapText(buildCategoryCountsLine(data.categories, 9999), w - 2)
+        for _, line in ipairs(countLines) do
+            if currentY > maxBodyY then break end
+            writeAt(termObj, 2, currentY, line, colors.lightGray, colors.black)
+            currentY = currentY + 1
+        end
 
-        local warnText, warnColor = buildCategoryWarnLine(data.categories, w - 2)
-        writeAt(termObj, 2, y, warnText, warnColor, colors.black)
-        y = y + 1
+        if currentY <= maxBodyY then
+            local warnText, warnColor = buildCategoryWarnLine(data.categories, 9999)
+            local warnLines = wrapText(warnText, w - 2)
+            for _, line in ipairs(warnLines) do
+                if currentY > maxBodyY then break end
+                writeAt(termObj, 2, currentY, line, warnColor, colors.black)
+                currentY = currentY + 1
+            end
+        end
     end
 
-    if y <= maxBodyY then
+    if currentY <= maxBodyY then
         local footerInfo = "Disques: " .. tostring(data.diskCount)
-        writeAt(termObj, 2, y, footerInfo, colors.lightGray, colors.black)
+        writeAt(termObj, 2, currentY, footerInfo, colors.lightGray, colors.black)
     end
 
     drawFooter(termObj, w, h)
@@ -1131,6 +1066,27 @@ end
 -- =========================
 -- PALETTE / BUFFERS
 -- =========================
+local function applyPalette()
+    if not CONFIG.USE_CUSTOM_PALETTE then
+        return
+    end
+
+    pcall(function()
+        mon.setPaletteColor(colors.black,      0x101218)
+        mon.setPaletteColor(colors.gray,       0x2B3240)
+        mon.setPaletteColor(colors.lightGray,  0x8E97A8)
+        mon.setPaletteColor(colors.white,      0xF2F4F8)
+        mon.setPaletteColor(colors.cyan,       0x38BDF8)
+        mon.setPaletteColor(colors.blue,       0x2563EB)
+        mon.setPaletteColor(colors.lightBlue,  0x60A5FA)
+        mon.setPaletteColor(colors.green,      0x16A34A)
+        mon.setPaletteColor(colors.lime,       0x84CC16)
+        mon.setPaletteColor(colors.yellow,     0xEAB308)
+        mon.setPaletteColor(colors.orange,     0xF97316)
+        mon.setPaletteColor(colors.red,        0xEF4444)
+    end)
+end
+
 applyPalette()
 
 -- =========================
@@ -1149,7 +1105,6 @@ local function render()
     applyPalette()
 
     if not bridge then
-        state.lastError = "rs_bridge non detecte"
         local termObj, w, h = getBuffer()
         fillLine(termObj, 1, colors.gray)
         writeAt(termObj, 2, 1, CONFIG.TITLE, colors.white, colors.gray)
@@ -1165,7 +1120,6 @@ local function render()
     pushHistory(history.fluids, data.fluids.used)
     pushHistory(history.energy, data.energy.stored)
 
-    state.frame = state.frame + 1
     drawScreen(data)
 end
 
