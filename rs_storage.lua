@@ -252,6 +252,14 @@ local backBuffer
 -- =========================
 -- OUTILS
 -- =========================
+
+local function fillLine(termObj, y, bg)
+    local w = termObj.getSize()
+    termObj.setCursorPos(1, y)
+    termObj.setBackgroundColor(bg or colors.black)
+    termObj.write(string.rep(" ", w))
+end
+
 local function clamp(value, minValue, maxValue)
     if value < minValue then return minValue end
     if value > maxValue then return maxValue end
