@@ -1,6 +1,6 @@
 -- =========================================================
--- Refined Storage Storage Dashboard v7
--- Une seule page / layout propre / anti-scintillement
+-- Refined Storage Storage Dashboard v8
+-- Single page / clean layout / anti-flicker
 -- CC:Tweaked + rs_bridge
 -- =========================================================
 
@@ -10,12 +10,10 @@
 local CONFIG = {
     AUTO_UPDATE_URL = "https://raw.githubusercontent.com/MrJuju0319/autres/refs/heads/main/rs_storage.lua",
     AUTO_UPDATE_ENABLED = true,
-    AUTO_UPDATE_FILE = "startup.lua",
-    AUTO_UPDATE_TMP = "startup.lua.tmp",
 
-    TITLE = "Refined Storage - Storage v7",
+    TITLE = "Refined Storage - Storage v8",
     TEXT_SCALE = 0.5,
-    REFRESH_INTERVAL = 0.75,
+    REFRESH_INTERVAL = 1.0,
     SLOW_REFRESH_INTERVAL = 10,
     ETA_SMOOTHING = 0.35,
     USE_CUSTOM_PALETTE = true,
@@ -51,10 +49,6 @@ local CONFIG = {
     },
 
     ABBR = {
-        items = "ITM",
-        fluids = "FLD",
-        energy = "NRG",
-
         item = "ITD",
         fluid = "FLD",
         energy_disk = "ENG",
@@ -116,7 +110,7 @@ local function getCurrentFile()
             return p
         end
     end
-    return CONFIG.AUTO_UPDATE_FILE
+    return "rs_storage.lua"
 end
 
 local function readFile(path)
@@ -136,7 +130,7 @@ local function writeFile(path, content)
     return true
 end
 
-local function fetchUrl(url)
+local function fetchUrl(url, tmpPath)
     if http and http.get then
         local ok, response = pcall(http.get, url)
         if ok and response then
@@ -149,17 +143,17 @@ local function fetchUrl(url)
     end
 
     if shell and shell.run then
-        if fs.exists(CONFIG.AUTO_UPDATE_TMP) then
-            fs.delete(CONFIG.AUTO_UPDATE_TMP)
+        if fs.exists(tmpPath) then
+            fs.delete(tmpPath)
         end
 
         local ok = pcall(function()
-            shell.run("wget", url, CONFIG.AUTO_UPDATE_TMP)
+            shell.run("wget", url, tmpPath)
         end)
 
-        if ok and fs.exists(CONFIG.AUTO_UPDATE_TMP) then
-            local content = readFile(CONFIG.AUTO_UPDATE_TMP)
-            fs.delete(CONFIG.AUTO_UPDATE_TMP)
+        if ok and fs.exists(tmpPath) then
+            local content = readFile(tmpPath)
+            fs.delete(tmpPath)
             if content and content ~= "" then
                 return content
             end
@@ -174,24 +168,26 @@ local function autoUpdate()
         return
     end
 
-    local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL)
+    local currentFile = getCurrentFile()
+    local tmpFile = currentFile .. ".tmp"
+
+    local remote = fetchUrl(CONFIG.AUTO_UPDATE_URL, tmpFile)
     if not remote then
         print("Auto-update: impossible de verifier la version distante.")
         return
     end
 
-    local currentFile = getCurrentFile()
     local localContent = readFile(currentFile)
     if localContent == remote then
         print("Auto-update: aucune mise a jour.")
         return
     end
 
-    if writeFile(CONFIG.AUTO_UPDATE_TMP, remote) then
+    if writeFile(tmpFile, remote) then
         if fs.exists(currentFile) then
             fs.delete(currentFile)
         end
-        fs.move(CONFIG.AUTO_UPDATE_TMP, currentFile)
+        fs.move(tmpFile, currentFile)
         print("Auto-update: mise a jour appliquee, reboot...")
         sleep(1)
         os.reboot()
@@ -201,6 +197,230 @@ local function autoUpdate()
 end
 
 autoUpdate()
+
+-- =========================
+-- HELPERS
+-- =========================
+local function clamp(value, minValue, maxValue)
+    if value < minValue then return minValue end
+    if value > maxValue then return maxValue end
+    return value
+end
+
+local function safe(fn, default)
+    local ok, res = pcall(fn)
+    if ok then return res end
+    return default
+end
+
+local function nowSec()
+    return os.epoch("utc") / 1000
+end
+
+local function trim(text, maxLen)
+    text = tostring(text or "")
+    if maxLen <= 0 then return "" end
+    if #text <= maxLen then return text end
+    if maxLen <= 3 then return text:sub(1, maxLen) end
+    return text:sub(1, maxLen - 3) .. "..."
+end
+
+local function toNumber(v, default)
+    v = tonumber(v)
+    if v == nil then return default or 0 end
+    return v
+end
+
+local function percent(used, total)
+    used = tonumber(used) or 0
+    total = tonumber(total) or 0
+    if total <= 0 then return 0 end
+    return clamp(math.floor((used / total) * 100 + 0.5), 0, 100)
+end
+
+local function formatNumber(n)
+    n = tonumber(n) or 0
+    local sign = ""
+    if n < 0 then
+        sign = "-"
+        n = math.abs(n)
+    end
+
+    if n >= 1000000000000 then
+        return sign .. string.format("%.2fT", n / 1000000000000)
+    elseif n >= 1000000000 then
+        return sign .. string.format("%.2fG", n / 1000000000)
+    elseif n >= 1000000 then
+        return sign .. string.format("%.2fM", n / 1000000)
+    elseif n >= 1000 then
+        return sign .. string.format("%.2fk", n / 1000)
+    else
+        return sign .. tostring(math.floor(n + 0.5))
+    end
+end
+
+local function formatRate(n)
+    n = tonumber(n) or 0
+    local sign = ""
+    if n > 0 then sign = "+" end
+    return sign .. formatNumber(n) .. "/s"
+end
+
+local function formatTime(seconds)
+    if not seconds or seconds < 0 or seconds == math.huge then
+        return "--"
+    end
+    if seconds > 30 * 24 * 3600 then
+        return "long"
+    end
+
+    seconds = math.floor(seconds + 0.5)
+    local d = math.floor(seconds / 86400)
+    seconds = seconds % 86400
+    local h = math.floor(seconds / 3600)
+    seconds = seconds % 3600
+    local m = math.floor(seconds / 60)
+    local s = seconds % 60
+
+    if d > 0 then
+        return string.format("%dj%02dh", d, h)
+    elseif h > 0 then
+        return string.format("%dh%02dm", h, m)
+    elseif m > 0 then
+        return string.format("%dm%02ds", m, s)
+    else
+        return string.format("%ds", s)
+    end
+end
+
+local function getPercentColor(p)
+    if p >= 95 then
+        return colors.red
+    elseif p >= 80 then
+        return colors.orange
+    elseif p >= 60 then
+        return colors.yellow
+    else
+        return colors.lime
+    end
+end
+
+local function pushHistory(tbl, value)
+    tbl[#tbl + 1] = tonumber(value) or 0
+    while #tbl > 48 do
+        table.remove(tbl, 1)
+    end
+end
+
+local function firstExisting(tbl, keys, default)
+    if type(tbl) ~= "table" then return default end
+    for _, k in ipairs(keys) do
+        if tbl[k] ~= nil then
+            return tbl[k]
+        end
+    end
+    return default
+end
+
+local function categoryOrderIndex(key)
+    return CONFIG.CATEGORY_ORDER[key] or 999
+end
+
+local function wrapText(text, width)
+    text = tostring(text or "")
+    width = math.max(1, width)
+
+    local lines = {}
+    if text == "" then
+        return { "" }
+    end
+
+    while #text > width do
+        local cut = width
+        local space = text:sub(1, width):match("^.*() ")
+        if space and space > math.floor(width * 0.5) then
+            cut = space
+        end
+
+        local line = text:sub(1, cut):gsub("%s+$", "")
+        lines[#lines + 1] = line
+        text = text:sub(cut + 1):gsub("^%s+", "")
+    end
+
+    if text ~= "" then
+        lines[#lines + 1] = text
+    end
+
+    return lines
+end
+
+-- =========================
+-- UI HELPERS
+-- =========================
+local function fillLine(termObj, y, bg)
+    local w = termObj.getSize()
+    termObj.setCursorPos(1, y)
+    termObj.setBackgroundColor(bg or colors.black)
+    termObj.write(string.rep(" ", w))
+end
+
+local function writeAt(termObj, x, y, text, fg, bg, maxLen)
+    local w = termObj.getSize()
+    if y < 1 then return end
+    if x > w then return end
+
+    text = tostring(text or "")
+    if maxLen then
+        text = trim(text, maxLen)
+    end
+
+    if x < 1 then
+        text = text:sub(2 - x)
+        x = 1
+    end
+
+    if text == "" then return end
+
+    termObj.setCursorPos(x, y)
+    if bg then termObj.setBackgroundColor(bg) end
+    if fg then termObj.setTextColor(fg) end
+    termObj.write(trim(text, w - x + 1))
+end
+
+local function centerText(termObj, y, text, fg, bg)
+    local w = termObj.getSize()
+    text = trim(text, w)
+    local x = math.max(1, math.floor((w - #text) / 2) + 1)
+    writeAt(termObj, x, y, text, fg, bg)
+end
+
+local function drawButton(termObj, x, y, label, isActive)
+    local bg = isActive and colors.blue or colors.gray
+    local fg = colors.white
+    local text = " " .. label .. " "
+    writeAt(termObj, x, y, text, fg, bg)
+    return #text
+end
+
+local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
+    ratio = clamp(ratio or 0, 0, 1)
+    local filled = clamp(math.floor((w * ratio) + 0.5), 0, w)
+
+    termObj.setCursorPos(x, y)
+    termObj.setBackgroundColor(emptyColor)
+    termObj.write(string.rep(" ", w))
+
+    if filled > 0 then
+        termObj.setCursorPos(x, y)
+        termObj.setBackgroundColor(fillColor)
+        termObj.write(string.rep(" ", filled))
+    end
+
+    if label and #label > 0 then
+        local tx = x + math.max(0, math.floor((w - #label) / 2))
+        writeAt(termObj, tx, y, label, colors.white, nil)
+    end
+end
 
 -- =========================
 -- PERIPHERIQUES
@@ -250,159 +470,8 @@ local energyStats = {
 local backBuffer
 
 -- =========================
--- OUTILS
+-- ALERTS
 -- =========================
-
-local function writeAt(termObj, x, y, text, fg, bg, maxLen)
-    local w = termObj.getSize()
-    if y < 1 then return end
-    if x > w then return end
-
-    text = tostring(text or "")
-    if maxLen then
-        text = trim(text, maxLen)
-    end
-
-    if x < 1 then
-        text = text:sub(2 - x)
-        x = 1
-    end
-
-    if text == "" then return end
-
-    termObj.setCursorPos(x, y)
-    if bg then termObj.setBackgroundColor(bg) end
-    if fg then termObj.setTextColor(fg) end
-    termObj.write(trim(text, w - x + 1))
-end
- 
-local function centerText(termObj, y, text, fg, bg)
-    local w = termObj.getSize()
-    text = trim(text, w)
-    local x = math.max(1, math.floor((w - #text) / 2) + 1)
-    writeAt(termObj, x, y, text, fg, bg)
-end
-
-local function fillLine(termObj, y, bg)
-    local w = termObj.getSize()
-    termObj.setCursorPos(1, y)
-    termObj.setBackgroundColor(bg or colors.black)
-    termObj.write(string.rep(" ", w))
-end
-
-local function clamp(value, minValue, maxValue)
-    if value < minValue then return minValue end
-    if value > maxValue then return maxValue end
-    return value
-end
-
-local function safe(fn, default)
-    local ok, res = pcall(fn)
-    if ok then return res end
-    return default
-end
-
-local function nowSec()
-    return os.epoch("utc") / 1000
-end
-
-local function trim(text, maxLen)
-    text = tostring(text or "")
-    if maxLen <= 0 then return "" end
-    if #text <= maxLen then return text end
-    if maxLen <= 3 then return text:sub(1, maxLen) end
-    return text:sub(1, maxLen - 3) .. "..."
-end
-
-local function toNumber(v, default)
-    v = tonumber(v)
-    if v == nil then return default or 0 end
-    return v
-end
-
-local function percent(used, total)
-    used = tonumber(used) or 0
-    total = tonumber(total) or 0
-    if total <= 0 then return 0 end
-    local p = math.floor((used / total) * 100 + 0.5)
-    return clamp(p, 0, 100)
-end
-
-local function formatNumber(n)
-    n = tonumber(n) or 0
-    local sign = ""
-    if n < 0 then
-        sign = "-"
-        n = math.abs(n)
-    end
-
-    if n >= 1000000000000 then
-        return sign .. string.format("%.2fT", n / 1000000000000)
-    elseif n >= 1000000000 then
-        return sign .. string.format("%.2fG", n / 1000000000)
-    elseif n >= 1000000 then
-        return sign .. string.format("%.2fM", n / 1000000)
-    elseif n >= 1000 then
-        return sign .. string.format("%.2fk", n / 1000)
-    else
-        return sign .. tostring(math.floor(n + 0.5))
-    end
-end
-
-local function formatTime(seconds)
-    if not seconds or seconds < 0 or seconds == math.huge then
-        return "--"
-    end
-
-    if seconds > 30 * 24 * 3600 then
-        return "long"
-    end
-
-    seconds = math.floor(seconds + 0.5)
-    local d = math.floor(seconds / 86400)
-    seconds = seconds % 86400
-    local h = math.floor(seconds / 3600)
-    seconds = seconds % 3600
-    local m = math.floor(seconds / 60)
-    local s = seconds % 60
-
-    if d > 0 then
-        return string.format("%dj%02dh", d, h)
-    elseif h > 0 then
-        return string.format("%dh%02dm", h, m)
-    elseif m > 0 then
-        return string.format("%dm%02ds", m, s)
-    else
-        return string.format("%ds", s)
-    end
-end
-
-local function formatRate(n)
-    n = tonumber(n) or 0
-    local sign = ""
-    if n > 0 then sign = "+" end
-    return sign .. formatNumber(n) .. "/s"
-end
-
-local function pushHistory(tbl, value)
-    tbl[#tbl + 1] = tonumber(value) or 0
-    while #tbl > 48 do
-        table.remove(tbl, 1)
-    end
-end
-
-local function getPercentColor(p)
-    if p >= 95 then
-        return colors.red
-    elseif p >= 80 then
-        return colors.orange
-    elseif p >= 60 then
-        return colors.yellow
-    else
-        return colors.lime
-    end
-end
-
 local function getAlertConfig(key)
     return CONFIG.ALERTS.thresholds[key] or CONFIG.ALERTS.thresholds.default
 end
@@ -449,20 +518,9 @@ local function buildAlert(key, pct, context)
     end
 end
 
-local function firstExisting(tbl, keys, default)
-    if type(tbl) ~= "table" then return default end
-    for _, k in ipairs(keys) do
-        if tbl[k] ~= nil then
-            return tbl[k]
-        end
-    end
-    return default
-end
-
-local function categoryOrderIndex(key)
-    return CONFIG.CATEGORY_ORDER[key] or 999
-end
-
+-- =========================
+-- CELLS / CATEGORIES
+-- =========================
 local function parseCapacityFromName(name, categoryKey)
     local lower = string.lower(name or "")
 
@@ -642,6 +700,9 @@ local function refreshSlowData(charging, force)
     cache.slowLastRefresh = now
 end
 
+-- =========================
+-- ENERGY
+-- =========================
 local function updateEnergyStats(storedEnergy, avgInput)
     local now = nowSec()
 
@@ -662,6 +723,9 @@ local function updateEnergyStats(storedEnergy, avgInput)
     energyStats.avgInput = avgInput
 end
 
+-- =========================
+-- DATA
+-- =========================
 local function buildData()
     local usedItems = toNumber(safe(function() return bridge.getUsedItemStorage() end, 0), 0)
     local totalItems = toNumber(safe(function() return bridge.getTotalItemStorage() end, 0), 0)
@@ -746,7 +810,7 @@ local function buildData()
 end
 
 -- =========================
--- UI
+-- PALETTE
 -- =========================
 local function applyPalette()
     if not CONFIG.USE_CUSTOM_PALETTE then
@@ -769,6 +833,9 @@ local function applyPalette()
     end)
 end
 
+-- =========================
+-- BUFFER
+-- =========================
 local function getBuffer()
     local w, h = mon.getSize()
 
@@ -790,35 +857,9 @@ local function getBuffer()
     return backBuffer, w, h
 end
 
-local function drawButton(termObj, x, y, label, isActive)
-    local bg = isActive and colors.blue or colors.gray
-    local fg = colors.white
-    local text = " " .. label .. " "
-    writeAt(termObj, x, y, text, fg, bg)
-    return #text
-end
-
-local function drawProgressBar(termObj, x, y, w, ratio, fillColor, emptyColor, label)
-    ratio = clamp(ratio or 0, 0, 1)
-    local filled = math.floor((w * ratio) + 0.5)
-    filled = clamp(filled, 0, w)
-
-    termObj.setCursorPos(x, y)
-    termObj.setBackgroundColor(emptyColor)
-    termObj.write(string.rep(" ", w))
-
-    if filled > 0 then
-        termObj.setCursorPos(x, y)
-        termObj.setBackgroundColor(fillColor)
-        termObj.write(string.rep(" ", filled))
-    end
-
-    if label and #label > 0 then
-        local tx = x + math.max(0, math.floor((w - #label) / 2))
-        writeAt(termObj, tx, y, label, colors.white, nil)
-    end
-end
-
+-- =========================
+-- DRAW
+-- =========================
 local function drawHeader(termObj, data, w)
     fillLine(termObj, 1, colors.gray)
     fillLine(termObj, 2, colors.black)
@@ -841,8 +882,7 @@ local function drawHeader(termObj, data, w)
     centerText(termObj, 2, trim(meta, w - 4), colors.lightGray, colors.black)
 
     local occ = math.max(data.items.percent or 0, data.fluids.percent or 0, data.energy.percent or 0)
-    local label = "Occupation max " .. tostring(occ) .. "%"
-    drawProgressBar(termObj, 3, 3, math.max(10, w - 4), occ / 100, colors.green, colors.gray, label)
+    drawProgressBar(termObj, 3, 3, math.max(10, w - 4), occ / 100, colors.green, colors.gray, "Occupation max " .. tostring(occ) .. "%")
 
     local mainAlert = "ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
     writeAt(termObj, 2, 4, trim(mainAlert, math.max(1, w - 18)), colors.lightBlue, colors.black)
@@ -869,22 +909,20 @@ local function drawMetricCard(termObj, title, used, total, pct, alert, extra1, x
         main = main .. " " .. unit
     end
     writeAt(termObj, innerX, y + 1, trim(main, innerW), colors.white, colors.black)
-
     drawProgressBar(termObj, innerX, y + 2, innerW, pct / 100, getPercentColor(pct), colors.gray, "")
-
     writeAt(termObj, innerX, y + 3, trim(extra1 or "", innerW), colors.lightGray, colors.black)
 end
 
-local function buildCategoryCountsLine(categories, maxWidth)
+local function buildCategoryCountsLine(categories)
     local parts = {}
     for _, cat in ipairs(categories) do
         local abbr = CONFIG.ABBR[cat.key] or string.upper(string.sub(cat.key, 1, 3))
         parts[#parts + 1] = abbr .. "x" .. tostring(cat.count)
     end
-    return trim("Cats: " .. table.concat(parts, " | "), maxWidth)
+    return "Cats: " .. table.concat(parts, " | ")
 end
 
-local function buildCategoryWarnLine(categories, maxWidth)
+local function buildCategoryWarnLine(categories)
     local parts = {}
     local worst = 0
 
@@ -903,7 +941,7 @@ local function buildCategoryWarnLine(categories, maxWidth)
     end
 
     local color = (worst >= 2) and colors.red or colors.orange
-    return trim("Cat warn: " .. table.concat(parts, " | "), maxWidth), color
+    return "Cat warn: " .. table.concat(parts, " | "), color
 end
 
 local function drawFooter(termObj, w, h)
@@ -919,84 +957,27 @@ local function drawFooter(termObj, w, h)
     left = left + drawButton(termObj, left, h, "CAT", state.showCategorySummary) + 2
     left = left + drawButton(termObj, left, h, "REF", false) + 2
 
-    local info = "Synthese"
-    writeAt(termObj, math.max(left, w - #info - 1), h, info, colors.cyan, colors.black)
-end
-
-local function wrapText(text, width)
-    text = tostring(text or "")
-    width = math.max(1, width)
-
-    local lines = {}
-    if text == "" then
-        return { "" }
-    end
-
-    while #text > width do
-        local cut = width
-        local space = text:sub(1, width):match("^.*() ")
-        if space and space > math.floor(width * 0.5) then
-            cut = space
-        end
-
-        local line = text:sub(1, cut)
-        line = line:gsub("%s+$", "")
-        lines[#lines + 1] = line
-        text = text:sub(cut + 1):gsub("^%s+", "")
-    end
-
-    if text ~= "" then
-        lines[#lines + 1] = text
-    end
-
-    return lines
+    writeAt(termObj, math.max(left, w - 9), h, "Synthese", colors.cyan, colors.black)
 end
 
 local function drawScreen(data)
     local termObj, w, h = getBuffer()
-
     drawHeader(termObj, data, w)
 
-    local top = CONFIG.HEADER_HEIGHT + 1
+    local top = 5
     local gutter = 2
-
     local leftW = math.floor((w - gutter) / 2)
     local rightW = w - leftW - gutter
-
     local leftX = 1
     local rightX = leftW + gutter + 1
 
-    local cardH = 4
+    drawMetricCard(termObj, "Items", data.items.used, data.items.total, data.items.percent, data.items.alert,
+        "Types: " .. tostring(data.items.types), leftX, top, leftW, "")
 
-    drawMetricCard(
-        termObj,
-        "Items",
-        data.items.used,
-        data.items.total,
-        data.items.percent,
-        data.items.alert,
-        "Types: " .. tostring(data.items.types),
-        leftX,
-        top,
-        leftW,
-        ""
-    )
+    drawMetricCard(termObj, "Fluides", data.fluids.used, data.fluids.total, data.fluids.percent, data.fluids.alert,
+        "Types: " .. tostring(data.fluids.types), rightX, top, rightW, "mB")
 
-    drawMetricCard(
-        termObj,
-        "Fluides",
-        data.fluids.used,
-        data.fluids.total,
-        data.fluids.percent,
-        data.fluids.alert,
-        "Types: " .. tostring(data.fluids.types),
-        rightX,
-        top,
-        rightW,
-        "mB"
-    )
-
-    local energyY = top + cardH + 1
+    local energyY = top + 5
 
     fillLine(termObj, energyY, colors.gray)
     fillLine(termObj, energyY + 1, colors.black)
@@ -1004,38 +985,31 @@ local function drawScreen(data)
     fillLine(termObj, energyY + 3, colors.black)
     fillLine(termObj, energyY + 4, colors.black)
 
-    local innerX = 2
-    local innerW = math.max(10, w - 2)
-
     local headRight = tostring(data.energy.percent) .. "% " .. data.energy.alert.text
-    writeAt(termObj, innerX, energyY, "Energie", colors.white, colors.gray, math.max(1, innerW - #headRight - 1))
-    writeAt(termObj, math.max(innerX, w - #headRight), energyY, headRight, data.energy.alert.color, colors.gray)
+    writeAt(termObj, 2, energyY, "Energie", colors.white, colors.gray, math.max(1, w - #headRight - 4))
+    writeAt(termObj, math.max(2, w - #headRight), energyY, headRight, data.energy.alert.color, colors.gray)
 
-    local energyMain = formatNumber(data.energy.stored) .. " / " .. formatNumber(data.energy.total) .. " FE"
-    writeAt(termObj, innerX, energyY + 1, trim(energyMain, innerW), colors.white, colors.black)
+    writeAt(termObj, 2, energyY + 1,
+        trim(formatNumber(data.energy.stored) .. " / " .. formatNumber(data.energy.total) .. " FE", w - 2),
+        colors.white, colors.black)
 
-    drawProgressBar(termObj, innerX, energyY + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
+    drawProgressBar(termObj, 2, energyY + 2, w - 2, data.energy.percent / 100, getPercentColor(data.energy.percent), colors.gray, "")
+    writeAt(termObj, 2, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
+    writeAt(termObj, 2, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
 
-    writeAt(termObj, innerX, energyY + 3, "Net: " .. formatRate(data.energy.deltaPerSec) .. " | " .. data.energy.trend, colors.lightBlue, colors.black)
-    writeAt(termObj, innerX, energyY + 4, "ETA: " .. data.energy.eta, colors.lightGray, colors.black)
-
+    local currentY = energyY + 6
     local maxBodyY = h - (CONFIG.SHOW_FOOTER and 2 or 0)
-    local summaryStartY = energyY + 6
 
-    for y = summaryStartY, maxBodyY do
+    for y = currentY, maxBodyY do
         fillLine(termObj, y, colors.black)
     end
 
-    local currentY = summaryStartY
-
     if state.showAlertSummary and currentY <= maxBodyY then
-        local summary = "Synthese alertes: ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
         local severity = math.max(
             data.items.alert.severity or 0,
             data.fluids.alert.severity or 0,
             data.energy.alert.severity or 0
         )
-
         local color = colors.lime
         if severity >= 2 then
             color = colors.red
@@ -1043,8 +1017,8 @@ local function drawScreen(data)
             color = colors.orange
         end
 
-        local lines = wrapText(summary, w - 2)
-        for _, line in ipairs(lines) do
+        local summary = "Synthese alertes: ITM " .. data.items.alert.text .. " | FLD " .. data.fluids.alert.text .. " | NRG " .. data.energy.alert.text
+        for _, line in ipairs(wrapText(summary, w - 2)) do
             if currentY > maxBodyY then break end
             writeAt(termObj, 2, currentY, line, color, colors.black)
             currentY = currentY + 1
@@ -1052,17 +1026,15 @@ local function drawScreen(data)
     end
 
     if state.showCategorySummary and currentY <= maxBodyY then
-        local countLines = wrapText(buildCategoryCountsLine(data.categories, 9999), w - 2)
-        for _, line in ipairs(countLines) do
+        for _, line in ipairs(wrapText(buildCategoryCountsLine(data.categories), w - 2)) do
             if currentY > maxBodyY then break end
             writeAt(termObj, 2, currentY, line, colors.lightGray, colors.black)
             currentY = currentY + 1
         end
 
         if currentY <= maxBodyY then
-            local warnText, warnColor = buildCategoryWarnLine(data.categories, 9999)
-            local warnLines = wrapText(warnText, w - 2)
-            for _, line in ipairs(warnLines) do
+            local warnText, warnColor = buildCategoryWarnLine(data.categories)
+            for _, line in ipairs(wrapText(warnText, w - 2)) do
                 if currentY > maxBodyY then break end
                 writeAt(termObj, 2, currentY, line, warnColor, colors.black)
                 currentY = currentY + 1
@@ -1071,8 +1043,7 @@ local function drawScreen(data)
     end
 
     if currentY <= maxBodyY then
-        local footerInfo = "Disques: " .. tostring(data.diskCount)
-        writeAt(termObj, 2, currentY, footerInfo, colors.lightGray, colors.black)
+        writeAt(termObj, 2, currentY, "Disques: " .. tostring(data.diskCount), colors.lightGray, colors.black)
     end
 
     drawFooter(termObj, w, h)
@@ -1080,7 +1051,12 @@ local function drawScreen(data)
 end
 
 -- =========================
--- INTERACTIONS
+-- PALETTE
+-- =========================
+applyPalette()
+
+-- =========================
+-- INTERACTION
 -- =========================
 local function handleTouch(x, y)
     local _, h = mon.getSize()
@@ -1102,33 +1078,7 @@ local function handleTouch(x, y)
 end
 
 -- =========================
--- PALETTE / BUFFERS
--- =========================
-local function applyPalette()
-    if not CONFIG.USE_CUSTOM_PALETTE then
-        return
-    end
-
-    pcall(function()
-        mon.setPaletteColor(colors.black,      0x101218)
-        mon.setPaletteColor(colors.gray,       0x2B3240)
-        mon.setPaletteColor(colors.lightGray,  0x8E97A8)
-        mon.setPaletteColor(colors.white,      0xF2F4F8)
-        mon.setPaletteColor(colors.cyan,       0x38BDF8)
-        mon.setPaletteColor(colors.blue,       0x2563EB)
-        mon.setPaletteColor(colors.lightBlue,  0x60A5FA)
-        mon.setPaletteColor(colors.green,      0x16A34A)
-        mon.setPaletteColor(colors.lime,       0x84CC16)
-        mon.setPaletteColor(colors.yellow,     0xEAB308)
-        mon.setPaletteColor(colors.orange,     0xF97316)
-        mon.setPaletteColor(colors.red,        0xEF4444)
-    end)
-end
-
-applyPalette()
-
--- =========================
--- BOUCLE
+-- LOOP
 -- =========================
 local function render()
     bridge = peripheral.find("rs_bridge") or peripheral.find("rsBridge") or bridge
