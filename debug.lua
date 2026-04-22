@@ -201,6 +201,13 @@ local function formatRate(n)
     return sign .. formatNumber(n) .. "/s"
 end
 
+local function pushHistory(tbl, value)
+    tbl[#tbl + 1] = tonumber(value) or 0
+    while #tbl > (CONFIG.historySize or 48) do
+        table.remove(tbl, 1)
+    end
+end
+
 local function formatTime(seconds)
     if not seconds or seconds < 0 or seconds == math.huge then
         return "--"
