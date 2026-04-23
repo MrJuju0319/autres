@@ -167,8 +167,22 @@ autoUpdate()
 -- HELPERS
 -- =========================
 local function clamp(value, minValue, maxValue)
-    if value < minValue then return minValue end
-    if value > maxValue then return maxValue end
+    value = tonumber(value)
+    minValue = tonumber(minValue)
+    maxValue = tonumber(maxValue)
+
+    if value == nil then
+        return minValue or 0
+    end
+
+    if minValue ~= nil and value < minValue then
+        return minValue
+    end
+
+    if maxValue ~= nil and value > maxValue then
+        return maxValue
+    end
+
     return value
 end
 
@@ -207,9 +221,13 @@ local function firstExisting(tbl, keys, default)
 end
 
 local function percent(used, total)
-    used = tonumber(used) or 0
-    total = tonumber(total) or 0
-    if total <= 0 then return nil end
+    used = tonumber(used)
+    total = tonumber(total)
+
+    if used == nil or total == nil or total <= 0 then
+        return nil
+    end
+
     return clamp(math.floor((used / total) * 100 + 0.5), 0, 100)
 end
 
@@ -603,8 +621,17 @@ local function drawProgressBar(frame, x, y, w, ratio, fillColor, emptyColor, lab
 
     fillRect(frame, startX, y, len, 1, emptyColor or colors.gray)
 
-    ratio = ratio == nil and nil or clamp(ratio, 0, 1)
-    local filled = ratio and clamp(math.floor((len * ratio) + 0.5), 0, len) or 0
+    if ratio ~= nil then
+        ratio = tonumber(ratio)
+        if ratio ~= nil then
+            ratio = clamp(ratio, 0, 1)
+        end
+    end
+
+    local filled = 0
+    if ratio ~= nil then
+        filled = clamp(math.floor((len * ratio) + 0.5), 0, len)
+    end
 
     if filled > 0 then
         line.bg = replaceSlice(line.bg, startX, string.rep(toBlitColour(fillColor or colors.gray), filled))
